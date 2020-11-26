@@ -3682,6 +3682,21 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           Whenever it is not full, the bucket is refilled with tokens at the
           rate specified by <ref column="ingress_policing_rate"/>.
         </li>
+        <li>
+          The size of the bucket corresponds to <ref
+          column="ingress_policing_kpkts_burst"/>.  Initially the bucket is
+          full.
+        </li>
+        <li>
+          Whenever a packet is received, its size (converted to tokens) is
+          compared to the number of tokens currently in the bucket.  If the
+          required number of tokens are available, they are removed and the
+          packet is forwarded.  Otherwise, the packet is dropped.
+        </li>
+        <li>
+          Whenever it is not full, the bucket is refilled with tokens at the
+          rate specified by <ref column="ingress_policing_kpkts_rate"/>.
+        </li>
       </ul>
       <p>
         Packet rate policing:
