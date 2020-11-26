@@ -1620,16 +1620,20 @@ netdev_get_custom_stats(const struct netdev *netdev,
 }
 
 
-/* Attempts to set input rate limiting (policing) policy, such that up to
- * 'kbits_rate' kbps of traffic is accepted, with a maximum accumulative burst
- * size of 'kbits' kb. */
+/* Attempts to set input rate limiting (policing) policy, such that
+ * up to 'kbits_rate' kbps of traffic is accepted, with a maximum
+ * accumulative burst size of 'kbits_burst' kb;
+ * up to 'kpkts_rate' kpps of traffic is accepted, with a maximum
+ * accumulative burst size of 'kpkts_burst' kilo-packets;
+ */
 int
 netdev_set_policing(struct netdev *netdev, uint32_t kbits_rate,
-                    uint32_t kbits_burst)
+                    uint32_t kbits_burst, uint32_t kpkts_rate,
+                    uint32_t kpkts_burst)
 {
     return (netdev->netdev_class->set_policing
             ? netdev->netdev_class->set_policing(netdev,
-                    kbits_rate, kbits_burst)
+                    kbits_rate, kbits_burst, kpkts_rate, kpkts_burst)
             : EOPNOTSUPP);
 }
 
