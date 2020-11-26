@@ -549,6 +549,12 @@ is_tap_netdev(const struct netdev *netdev)
     return netdev_get_class(netdev) == &netdev_tap_class;
 }
 
+enum {
+    OVS_TC_QOS_TYPE_BPS,
+    OVS_TC_QOS_TYPE_PPS,
+    OVS_TC_QOS_TYPE_MAX,
+};
+
 static int
 netdev_linux_netnsid_update__(struct netdev_linux *netdev)
 {
