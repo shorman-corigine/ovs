@@ -3672,6 +3672,21 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           Whenever it is not full, the bucket is refilled with tokens at the
           rate specified by <ref column="ingress_policing_rate"/>.
         </li>
+        <li>
+          The size of the bucket corresponds to <ref
+          column="ingress_policing_kpkts_burst"/>.  Initially the bucket is
+          full.
+        </li>
+        <li>
+          Whenever a packet is received, its size (converted to tokens) is
+          compared to the number of tokens currently in the bucket.  If the
+          required number of tokens are available, they are removed and the
+          packet is forwarded.  Otherwise, the packet is dropped.
+        </li>
+        <li>
+          Whenever it is not full, the bucket is refilled with tokens at the
+          rate specified by <ref column="ingress_policing_kpkts_rate"/>.
+        </li>
       </ul>
       <p>
         Policing interacts badly with some network protocols, and especially
@@ -3698,6 +3713,14 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         </p>
       </column>
 
+      <column name="ingress_policing_kpkts_rate">
+        <p>
+          Maximum rate for data received on this interface, in kpps.  Data
+          received faster than this rate is dropped.  Set to <code>0</code>
+          (the default) to disable policing.
+        </p>
+      </column>
+
       <column name="ingress_policing_burst">
         <p>Maximum burst size for data received on this interface, in kb.  The
         default burst size if set to <code>0</code> is 8000 kbit.  This value
@@ -3712,6 +3735,24 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           closer to achieving the full rate.
         </p>
       </column>
+
+      <column name="ingress_policing_kpkts_burst">
+        <p>
+          Maximum burst size for data received on this interface, in
+          kilo-packets.  The default burst size if set to <code>0</code> is
+          16 kilo-packets. This value has no effect if <ref
+          column="ingress_policing_kpkts_rate"/> is <code>0</code>.</p>
+        <p>
+          Specifying a larger burst size lets the algorithm be more
+          forgiving, which is important for protocols like TCP that react
+          severely to dropped packets.  The burst size should be at least
+          the size of the interface's MTU.  Specifying a value that is
+          numerically at least as large as 80% of <ref
+          column="ingress_policing_kpkts_rate"/> helps TCP come closer to
+          achieving the full rate.
+        </p>
+      </column>
+
     </group>
 
     <group title="Bidirectional Forwarding Detection (BFD)">
