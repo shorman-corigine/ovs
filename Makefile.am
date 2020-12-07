@@ -82,6 +82,7 @@ EXTRA_DIST = \
 	.ci/osx-prepare.sh \
 	.cirrus.yml \
 	.github/workflows/build-and-test.yml \
+	.github/workflows/build-and-test-lite.yml \
 	.travis.yml \
 	appveyor.yml \
 	boot.sh \
