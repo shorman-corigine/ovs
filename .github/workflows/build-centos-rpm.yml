@@ -1,0 +1,46 @@
+name: Build Centos
+
+on: [push, pull_request]
+
+jobs:
+  build-centos:
+
+    name: linux ${{ join(matrix.*, ' ') }}
+    runs-on: ubuntu-18.04
+    timeout-minutes: 60
+    container:
+      centos:8.1.1911
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler:     gcc
+            rpm_package:  rpm
+
+    steps:
+    - name: checkout
+      uses: actions/checkout@v2
+    - name: Install Dependencies
+      run: dnf -q -y install gcc make automake
+    - name: rpm spec prepare
+      run: |
+        dnf -y groupinstall "Development Tools"
+        sed -e 's/@VERSION@/2.14.0/' rhel/openvswitch-fedora.spec.in > rhel/ovs.package.spec
+        sed -i 's/\/usr\/bin\/sphinx-build-3/python3-sphinx/' rhel/ovs.package.spec
+        dnf -y install dnf-plugins-core
+        dnf config-manager --enable PowerTools
+        dnf -q -y install rpm-build
+        dnf -y builddep rhel/ovs.package.spec
+    - name: rpm build prepare
+      run: |
+        ./boot.sh
+        ./configure
+    - name: rpm build
+      run:  make rpm-fedora
+
+    - name: upload rpm packages
+      uses: actions/upload-artifact@v2
+      with:
+        name: rpm-packages
+        path: './rpm/rpmbuild/RPMS/x86_64/*.rpm'
