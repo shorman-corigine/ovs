@@ -83,6 +83,7 @@ EXTRA_DIST = \
 	.cirrus.yml \
 	.github/workflows/build-and-test.yml \
 	.github/workflows/build-and-test-lite.yml \
+	.github/workflows/build-centos-rpm.yml \
 	.travis.yml \
 	appveyor.yml \
 	boot.sh \
