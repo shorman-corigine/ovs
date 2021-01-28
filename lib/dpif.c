@@ -1911,7 +1911,7 @@ dpif_meter_get_features(const struct dpif *dpif,
  * The meter id specified through 'config->meter_id' is ignored. */
 int
 dpif_meter_set(struct dpif *dpif, ofproto_meter_id meter_id,
-               struct ofputil_meter_config *config)
+               bool add, struct ofputil_meter_config *config)
 {
     COVERAGE_INC(dpif_meter_set);
 
@@ -1933,7 +1933,7 @@ dpif_meter_set(struct dpif *dpif, ofproto_meter_id meter_id,
         }
     }
 
-    int error = dpif->dpif_class->meter_set(dpif, meter_id, config);
+    int error = dpif->dpif_class->meter_set(dpif, meter_id, add, config);
     if (!error) {
         VLOG_DBG_RL(&dpmsg_rl, "%s: DPIF meter %"PRIu32" set",
                     dpif_name(dpif), meter_id.uint32);

@@ -477,7 +477,7 @@ static const struct tc_ops *const tcs[] = {
 };
 
 static unsigned int tc_ticks_to_bytes(unsigned int rate, unsigned int ticks);
-static unsigned int tc_bytes_to_ticks(unsigned int rate, unsigned int size);
+unsigned int tc_bytes_to_ticks(unsigned int rate, unsigned int size);
 static unsigned int tc_buffer_per_jiffy(unsigned int rate);
 static uint32_t tc_time_to_ticks(uint32_t time);
 
@@ -503,10 +503,9 @@ static int tc_delete_class(const struct netdev *, unsigned int handle);
 static int tc_del_qdisc(struct netdev *netdev);
 static int tc_query_qdisc(const struct netdev *netdev);
 
-void
-tc_put_rtab(struct ofpbuf *msg, uint16_t type, const struct tc_ratespec *rate);
+void tc_put_rtab(struct ofpbuf *msg, uint16_t type, const struct tc_ratespec *rate);
 static int tc_calc_cell_log(unsigned int mtu);
-static void tc_fill_rate(struct tc_ratespec *rate, uint64_t bps, int mtu);
+void tc_fill_rate(struct tc_ratespec *rate, uint64_t bps, int mtu);
 static int tc_calc_buffer(unsigned int Bps, int mtu, uint64_t burst_bytes);
 
 
@@ -5711,7 +5710,7 @@ tc_ticks_to_bytes(unsigned int rate, unsigned int ticks)
 
 /* Returns the number of ticks that it would take to transmit 'size' bytes at a
  * rate of 'rate' bytes per second. */
-static unsigned int
+unsigned int
 tc_bytes_to_ticks(unsigned int rate, unsigned int size)
 {
     read_psched();
@@ -6071,7 +6070,7 @@ tc_calc_cell_log(unsigned int mtu)
 
 /* Initializes 'rate' properly for a rate of 'Bps' bytes per second with an MTU
  * of 'mtu'. */
-static void
+void
 tc_fill_rate(struct tc_ratespec *rate, uint64_t Bps, int mtu)
 {
     memset(rate, 0, sizeof *rate);

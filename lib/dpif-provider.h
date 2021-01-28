@@ -601,7 +601,7 @@ struct dpif_class {
      *
      * The meter id specified through 'config->meter_id' is ignored. */
     int (*meter_set)(struct dpif *, ofproto_meter_id meter_id,
-                     struct ofputil_meter_config *);
+                     bool add, struct ofputil_meter_config *);
 
     /* Queries 'dpif' for meter stats with the given 'meter_id'.  Stores
      * maximum of 'n_bands' meter statistics, returning the number of band
