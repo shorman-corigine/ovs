@@ -199,6 +199,19 @@ tc_make_request(int ifindex, int type, unsigned int flags,
     return tcmsg;
 }
 
+struct tcamsg *
+tc_act_make_request(int type, unsigned int flags, struct ofpbuf *request)
+{
+    struct tcamsg *tcamsg;
+
+    ofpbuf_init(request, 16384);
+    nl_msg_put_nlmsghdr(request, sizeof *tcamsg, type, NLM_F_REQUEST | flags);
+    tcamsg = ofpbuf_put_zeros(request, sizeof *tcamsg);
+    tcamsg->tca_family = AF_UNSPEC;
+
+    return tcamsg;
+}
+
 static void request_from_tcf_id(struct tcf_id *id, uint16_t eth_type,
                                 int type, unsigned int flags,
                                 struct ofpbuf *request)
