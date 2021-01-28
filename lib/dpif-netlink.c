@@ -25,6 +25,7 @@
 #include <net/if.h>
 #include <linux/types.h>
 #include <linux/pkt_sched.h>
+#include <linux/rtnetlink.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <strings.h>
@@ -60,6 +61,7 @@
 #include "packets.h"
 #include "random.h"
 #include "sset.h"
+#include "tc.h"
 #include "timeval.h"
 #include "unaligned.h"
 #include "util.h"
@@ -272,6 +274,16 @@ static int dpif_netlink_vport_from_ofpbuf(struct dpif_netlink_vport *,
 static int dpif_netlink_port_query__(const struct dpif_netlink *dpif,
                                      odp_port_t port_no, const char *port_name,
                                      struct dpif_port *dpif_port);
+unsigned int tc_bytes_to_ticks(unsigned int rate, unsigned int size);
+void tc_put_rtab(struct ofpbuf *msg, uint16_t type,
+                 const struct tc_ratespec *rate);
+void tc_fill_rate(struct tc_ratespec *rate, uint64_t bps, int mtu);
+static void dpif_netlink_police_start_nested(struct ofpbuf *request, int *prio,
+                                             size_t *total_offset,
+                                             size_t *basic_offset);
+static void dpif_netlink_police_end_nested(struct ofpbuf *request,
+                                           size_t *total_offset,
+                                           size_t *basic_offset);
 
 static int
 create_nl_sock(struct dpif_netlink *dpif OVS_UNUSED, struct nl_sock **sockp)
@@ -3950,6 +3962,23 @@ dpif_netlink_ct_timeout_policy_dump_done(struct dpif *dpif OVS_UNUSED,
 static bool probe_broken_meters(struct dpif *);
 
 static void
+dpif_netlink_police_start_nested(struct ofpbuf *request, int *prio,
+                           size_t *total_offset, size_t *basic_offset)
+{
+    *total_offset = nl_msg_start_nested(request, TCA_ACT_TAB);
+    *basic_offset = nl_msg_start_nested(request, ++*prio);
+    nl_msg_put_string(request, TCA_KIND, "police");
+}
+
+static void
+dpif_netlink_police_end_nested(struct ofpbuf *request, size_t *total_offset,
+                               size_t *basic_offset)
+{
+    nl_msg_end_nested(request, *basic_offset);
+    nl_msg_end_nested(request, *total_offset);
+}
+
+static void
 dpif_netlink_meter_init(struct dpif_netlink *dpif, struct ofpbuf *buf,
                         void *stub, size_t size, uint32_t command)
 {
@@ -4057,9 +4086,80 @@ dpif_netlink_meter_get_features(const struct dpif *dpif_,
     ofpbuf_delete(msg);
 }
 
+/* add/remove police action for the meter configuration */
+static int
+dpif_netlink_meter_add_police(ofproto_meter_id meter_id,
+                              struct ofputil_meter_config *config,
+                              bool add)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+    struct ofputil_meter_band * band = &config->bands[0];
+    unsigned int pkt_burst_ticks = 0, pps_rate = 0;
+    struct tc_police tc_police;
+    struct ofpbuf request;
+    struct tcamsg *tcmsg;
+    size_t total_offset;
+    size_t basic_offset;
+    size_t act_offset;
+    int mtu = 65535;
+    int prio = 0;
+    int error;
+
+    tcmsg = tc_act_make_request(RTM_NEWACTION,
+                                (add ? NLM_F_EXCL : NLM_F_REPLACE)
+                                | NLM_F_CREATE, &request);
+    if (!tcmsg) {
+        return ENODEV;
+    }
+
+    if (config->n_bands > 1) {
+        VLOG_ERR_RL(&rl, "TC offloading does not support more than one band");
+        return EINVAL;
+    }
+    memset(&tc_police, 0, sizeof tc_police);
+    dpif_netlink_police_start_nested(&request, &prio, &total_offset,
+                                     &act_offset);
+    tc_police.action = TC_POLICE_SHOT;
+    tc_police.mtu = mtu;
+    tc_police.index = 0xff << 24 | (meter_id.uint32 + 1) << 8;
+
+    if (config->flags & OFPMF13_KBPS) {
+        tc_fill_rate(&tc_police.rate, band->rate * 1000 / 8, mtu);
+        /* Set burst value to 1/5 of rate when the burst is not specified,
+         * and ratio from bit to byte is 1/8, therefore here is an ratio of
+         * 1/40 to calculate the burst */
+        tc_police.burst = tc_bytes_to_ticks(
+            tc_police.rate.rate, band->burst_size ?\
+            band->burst_size * 1000 / 8 : tc_police.rate.rate / 40);
+    } else {
+        pps_rate = band->rate;
+        pkt_burst_ticks = tc_bytes_to_ticks(pps_rate, band->burst_size?
+                                            band->burst_size : pps_rate / 5);
+    }
+    basic_offset = nl_msg_start_nested(&request, TCA_OPTIONS);
+    nl_msg_put_unspec(&request, TCA_POLICE_TBF, &tc_police, sizeof tc_police);
+    if (config->flags & OFPMF13_KBPS) {
+        tc_put_rtab(&request, TCA_POLICE_RATE, &tc_police.rate);
+    } else if (config->flags & OFPMF13_PKTPS) {
+        nl_msg_put_u64(&request, TCA_POLICE_PKTRATE64, (uint64_t) pps_rate);
+        nl_msg_put_u64(&request, TCA_POLICE_PKTBURST64,
+                       (uint64_t) pkt_burst_ticks);
+    }
+    nl_msg_end_nested(&request, basic_offset);
+    dpif_netlink_police_end_nested(&request, &total_offset, &act_offset);
+    error = tc_transact(&request, NULL);
+    if (error) {
+        VLOG_ERR_RL(&rl, "failed to send netlink msg for meterid %u error "
+                    "%d\n", config->meter_id, error);
+        return error;
+    }
+
+    return 0;
+}
+
 static int
 dpif_netlink_meter_set__(struct dpif *dpif_, ofproto_meter_id meter_id,
-                         struct ofputil_meter_config *config)
+                         bool add, struct ofputil_meter_config *config)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     struct ofpbuf buf, *msg;
@@ -4081,6 +4181,10 @@ dpif_netlink_meter_set__(struct dpif *dpif_, ofproto_meter_id meter_id,
         default:
             return ENODEV; /* Unsupported band type */
         }
+    }
+
+    if (netdev_is_flow_api_enabled()) {
+        dpif_netlink_meter_add_police(meter_id, config, add);
     }
 
     dpif_netlink_meter_init(dpif, &buf, stub, sizeof stub, OVS_METER_CMD_SET);
@@ -4136,13 +4240,13 @@ dpif_netlink_meter_set__(struct dpif *dpif_, ofproto_meter_id meter_id,
 
 static int
 dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id meter_id,
-                       struct ofputil_meter_config *config)
+                       bool add, struct ofputil_meter_config *config)
 {
     if (probe_broken_meters(dpif_)) {
         return ENOMEM;
     }
 
-    return dpif_netlink_meter_set__(dpif_, meter_id, config);
+    return dpif_netlink_meter_set__(dpif_, meter_id, add, config);
 }
 
 /* Retrieve statistics and/or delete meter 'meter_id'.  Statistics are
@@ -4260,8 +4364,8 @@ probe_broken_meters__(struct dpif *dpif)
     /* Try adding two meters and make sure that they both come back with
      * the proper meter id.  Use the "__" version so that we don't cause
      * a recurve deadlock. */
-    dpif_netlink_meter_set__(dpif, id1, &config1);
-    dpif_netlink_meter_set__(dpif, id2, &config2);
+    dpif_netlink_meter_set__(dpif, id1, true, &config1);
+    dpif_netlink_meter_set__(dpif, id2, true, &config2);
 
     if (dpif_netlink_meter_get(dpif, id1, NULL, 0)
         || dpif_netlink_meter_get(dpif, id2, NULL, 0)) {

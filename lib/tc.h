@@ -78,6 +78,9 @@ tc_get_minor(unsigned int handle)
     return TC_H_MIN(handle);
 }
 
+struct tcamsg *
+tc_act_make_request(int type, unsigned int flags, struct ofpbuf *request);
+
 struct tcmsg *tc_make_request(int ifindex, int type,
                               unsigned int flags, struct ofpbuf *);
 int tc_transact(struct ofpbuf *request, struct ofpbuf **replyp);

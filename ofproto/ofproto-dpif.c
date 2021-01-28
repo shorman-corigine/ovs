@@ -6688,7 +6688,7 @@ meter_get_features(const struct ofproto *ofproto_,
 
 static enum ofperr
 meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
-          struct ofputil_meter_config *config)
+          bool add, struct ofputil_meter_config *config)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
 
@@ -6703,7 +6703,7 @@ meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
         }
     }
 
-    switch (dpif_meter_set(ofproto->backer->dpif, *meter_id, config)) {
+    switch (dpif_meter_set(ofproto->backer->dpif, *meter_id, add, config)) {
     case 0:
         return 0;
     case EFBIG: /* meter_id out of range */
