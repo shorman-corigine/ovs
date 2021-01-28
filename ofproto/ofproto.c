@@ -6790,7 +6790,7 @@ handle_add_meter(struct ofproto *ofproto, struct ofputil_meter_mod *mm)
     }
 
     error = ofproto->ofproto_class->meter_set(ofproto, &provider_meter_id,
-                                              &mm->meter);
+                                              true, &mm->meter);
     if (!error) {
         ovs_assert(provider_meter_id.uint32 != UINT32_MAX);
         meter = meter_create(&mm->meter, provider_meter_id);
@@ -6813,6 +6813,7 @@ handle_modify_meter(struct ofproto *ofproto, struct ofputil_meter_mod *mm)
     provider_meter_id = meter->provider_meter_id.uint32;
     error = ofproto->ofproto_class->meter_set(ofproto,
                                               &meter->provider_meter_id,
+                                              false,
                                               &mm->meter);
     ovs_assert(meter->provider_meter_id.uint32 == provider_meter_id);
     if (!error) {

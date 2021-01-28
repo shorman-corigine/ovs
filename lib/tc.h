@@ -52,6 +52,11 @@ enum tc_flower_reserved_prio {
 };
 #define TC_RESERVED_PRIORITY_MAX (__TC_RESERVED_PRIORITY_MAX -1)
 
+/* Mapping meter_id.uint32 into a 32-bit integer, first 8 fixed bits(ff) is
+ * the prefix of meter related policy, following 16 bits are mapped by
+ * meter_id, last 8 bits are reserved for bands in further. */
+#define METER_ID_TO_POLICY_INDEX(meter_id) 0xff << 24 | (meter_id + 1) << 8
+
 enum tc_qdisc_hook {
     TC_INGRESS,
     TC_EGRESS,
@@ -77,6 +82,9 @@ tc_get_minor(unsigned int handle)
 {
     return TC_H_MIN(handle);
 }
+
+struct tcamsg *
+tc_act_make_request(int type, unsigned int flags, struct ofpbuf *request);
 
 struct tcmsg *tc_make_request(int ifindex, int type,
                               unsigned int flags, struct ofpbuf *);
