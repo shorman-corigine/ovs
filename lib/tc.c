@@ -2403,6 +2403,30 @@ nl_msg_put_act_flags(struct ofpbuf *request) {
     nl_msg_put_unspec(request, TCA_ACT_FLAGS, &act_flags, sizeof act_flags);
 }
 
+void
+nl_msg_fill_police(struct ofpbuf *request, struct tc_police police,
+                   size_t *offset)
+{
+    nl_msg_put_string(request, TCA_ACT_KIND, "police");
+    *offset = nl_msg_start_nested(request, TCA_ACT_OPTIONS);
+    nl_msg_put_unspec(request, TCA_POLICE_TBF, &police, sizeof police);
+}
+
+static void
+nl_msg_put_act_meter(struct ofpbuf *request, uint32_t meter_id)
+{
+    struct tc_police tc_police;
+    int mtu = 65535;
+    size_t offset;
+
+    tc_police.action = TC_POLICE_SHOT;
+    tc_police.mtu = mtu;
+    tc_police.index = 0xff << 24 | (meter_id + 1) << 8;
+    nl_msg_fill_police(request, tc_police, &offset);
+    nl_msg_end_nested(request, offset);
+}
+
+
 /* Given flower, a key_to_pedit map entry, calculates the rest,
  * where:
  *
@@ -2716,6 +2740,12 @@ nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower)
                 act_offset = nl_msg_start_nested(request, act_index++);
                 nl_msg_put_act_ct(request, action);
                 nl_msg_put_act_cookie(request, &flower->act_cookie);
+                nl_msg_end_nested(request, act_offset);
+            }
+            break;
+            case TC_ACT_METER: {
+                act_offset = nl_msg_start_nested(request,act_index++);
+                nl_msg_put_act_meter(request, action->meter.meter_id);
                 nl_msg_end_nested(request, act_offset);
             }
             break;
