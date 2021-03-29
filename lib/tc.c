@@ -1704,6 +1704,32 @@ nl_parse_act_csum(struct nlattr *options, struct tc_flower *flower)
     return 0;
 }
 
+static const struct nl_policy police_policy[] = {
+    [TCA_POLICE_TBF] = { .type = NL_A_UNSPEC,
+                         .min_len = sizeof(struct tc_police),
+                         .optional = false, },
+};
+
+static int nl_parse_act_meter(struct nlattr *options, struct tc_flower *flower)
+{
+    struct nlattr *attrs[__TCA_POLICE_MAX];
+    const struct tc_police *tc_police;
+    const struct nlattr *meter_parms;
+    struct tc_action *action;
+
+    action = &flower->actions[flower->action_count++];
+    if (!nl_parse_nested(options, police_policy, attrs,
+                         ARRAY_SIZE(police_policy))){
+        VLOG_ERR_RL(&error_rl, "failed to parse meter action options");
+        return EPROTO;
+    }
+    meter_parms = attrs[TCA_POLICE_TBF];
+    tc_police = nl_attr_get_unspec(meter_parms, sizeof *tc_police);
+    action->meter.meter_id = (((tc_police->index) >> 8) & 0xffff) - 1;
+    action->type = TC_ACT_METER;
+    return 0;
+}
+
 static const struct nl_policy act_policy[] = {
     [TCA_ACT_KIND] = { .type = NL_A_STRING, .optional = false, },
     [TCA_ACT_COOKIE] = { .type = NL_A_UNSPEC, .optional = true, },
@@ -1762,6 +1788,8 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
         /* Added for TC rule only (not in OvS rule) so ignore. */
     } else if (!strcmp(act_kind, "ct")) {
         nl_parse_act_ct(act_options, flower);
+    } else if (!strcmp(act_kind, "police")){
+        nl_parse_act_meter(act_options, flower);
     } else {
         VLOG_ERR_RL(&error_rl, "unknown tc action kind: %s", act_kind);
         err = EINVAL;
