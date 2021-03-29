@@ -2598,10 +2598,7 @@ nl_msg_put_act_police(struct ofpbuf *request, struct tc_police police,
                       uint32_t kpkts_rate, uint32_t kpkts_burst)
 {
     size_t offset;
-
-    nl_msg_put_string(request, TCA_ACT_KIND, "police");
-    offset = nl_msg_start_nested(request, TCA_ACT_OPTIONS);
-    nl_msg_put_unspec(request, TCA_POLICE_TBF, &police, sizeof police);
+    nl_msg_fill_police(request, police, &offset);
     tc_put_rtab(request, TCA_POLICE_RATE, &police.rate);
     nl_msg_put_u32(request, TCA_POLICE_RESULT, TC_ACT_UNSPEC);
     if (kpkts_rate) {

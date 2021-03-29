@@ -3774,7 +3774,6 @@ dpif_netlink_meter_add_police(ofproto_meter_id meter_id,
         nl_msg_put_u64(&request, TCA_POLICE_PKTRATE64, (uint64_t)pps_rate);
         nl_msg_put_u64(&request, TCA_POLICE_PKTBURST64, (uint64_t)pkt_burst_ticks);
     }
-    //nl_msg_end_nested(&request, police_offset);
     nl_msg_end_nested(&request, basic_offset);
     nl_msg_end_nested(&request, act_offset);
     nl_msg_end_nested(&request, total_offset);
