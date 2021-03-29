@@ -1795,6 +1795,10 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
             action->type = TC_ACT_GOTO;
             action->chain = 0;  /* 0 is reserved and not used by recirc. */
             flower.action_count++;
+        } else if (nl_attr_type(nla) == OVS_ACTION_ATTR_METER) {
+            action->type = TC_ACT_METER;
+            action->meter.meter_id = nl_attr_get_u16(nla);
+            flower.action_count++;
         } else {
             VLOG_DBG_RL(&rl, "unsupported put action type: %d",
                         nl_attr_type(nla));

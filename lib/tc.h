@@ -87,6 +87,8 @@ struct tcmsg *tc_make_request(int ifindex, int type,
 int tc_transact(struct ofpbuf *request, struct ofpbuf **replyp);
 int tc_add_del_qdisc(int ifindex, bool add, uint32_t block_id,
                      enum tc_qdisc_hook hook);
+void
+nl_msg_fill_police(struct ofpbuf *request, struct tc_police police, size_t *offset);
 
 struct tc_cookie {
     const void *data;
@@ -175,6 +177,7 @@ enum tc_action_type {
     TC_ACT_MPLS_SET,
     TC_ACT_GOTO,
     TC_ACT_CT,
+    TC_ACT_METER,
 };
 
 enum nat_type {
@@ -257,6 +260,10 @@ struct tc_action {
             bool force;
             bool commit;
         } ct;
+        
+        struct {
+            uint32_t meter_id;
+        } meter;
      };
 
      enum tc_action_type type;
