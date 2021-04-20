@@ -4158,6 +4158,41 @@ dpif_netlink_meter_add_police(ofproto_meter_id meter_id,
 }
 
 static int
+dpif_netlink_meter_del_police(ofproto_meter_id meter_id,
+                              struct ofputil_meter_stats *stats OVS_UNUSED,
+                              uint16_t max_bands OVS_UNUSED)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+    struct ofpbuf request;
+    struct tcamsg *tcmsg;
+    size_t total_offset;
+    size_t act_offset;
+    int index = 0;
+    int prio = 0;
+    int error;
+
+    tcmsg = tc_act_make_request(RTM_DELACTION, 0, &request);
+    if (!tcmsg) {
+        return ENODEV;
+    }
+
+    dpif_netlink_police_start_nested(&request, &prio, &total_offset,
+                                     &act_offset);
+    index = METER_ID_TO_POLICY_INDEX(meter_id.uint32);
+    nl_msg_put_u32(&request, TCA_ACT_INDEX, index);
+    dpif_netlink_police_end_nested(&request, &total_offset, &act_offset);
+
+    error = tc_transact(&request, NULL);
+    if (error) {
+        VLOG_ERR_RL(&rl, "failed to send del netlink msg for provider "
+                  "id %u error %d\n", meter_id.uint32, error);
+        return error;
+    }
+
+    return 0;
+}
+
+static int
 dpif_netlink_meter_set__(struct dpif *dpif_, ofproto_meter_id meter_id,
                          bool add, struct ofputil_meter_config *config)
 {
@@ -4345,6 +4380,11 @@ static int
 dpif_netlink_meter_del(struct dpif *dpif, ofproto_meter_id meter_id,
                        struct ofputil_meter_stats *stats, uint16_t max_bands)
 {
+
+    if (netdev_is_flow_api_enabled()) {
+        dpif_netlink_meter_del_police(meter_id, stats, max_bands);
+    }
+
     return dpif_netlink_meter_get_stats(dpif, meter_id, stats, max_bands,
                                         OVS_METER_CMD_DEL);
 }
