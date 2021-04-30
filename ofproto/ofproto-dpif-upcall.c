@@ -2755,6 +2755,7 @@ revalidate(struct revalidator *revalidator)
         ovsrcu_quiesce();
     }
     dpif_flow_dump_thread_destroy(dump_thread);
+    dpif_meter_revalidate(udpif->dpif, udpif->backer);
     ofpbuf_uninit(&odp_actions);
 }
 

@@ -2018,3 +2018,11 @@ dpif_bond_stats_get(struct dpif *dpif, uint32_t bond_id,
            ? dpif->dpif_class->bond_stats_get(dpif, bond_id, n_bytes)
            : EOPNOTSUPP;
 }
+
+int
+dpif_meter_revalidate(struct dpif *dpif, struct dpif_backer *backer)
+{
+    return dpif->dpif_class->meter_revalidate
+           ? dpif->dpif_class->meter_revalidate(dpif, backer)
+           : EOPNOTSUPP;
+}
