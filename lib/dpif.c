@@ -2090,3 +2090,9 @@ dpif_cache_set_size(struct dpif *dpif, uint32_t level, uint32_t size)
            ? dpif->dpif_class->cache_set_size(dpif, level, size)
            : EOPNOTSUPP;
 }
+
+void
+dpif_meter_revalidate(struct dpif *dpif, struct dpif_backer *backer)
+{
+    dpif->dpif_class->meter_revalidate(dpif, backer);
+}
