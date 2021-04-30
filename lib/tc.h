@@ -278,7 +278,12 @@ enum tc_offloaded_state {
     TC_OFFLOADED_STATE_NOT_IN_HW,
 };
 
+#ifndef TCA_DUMP_FLAGS_TERSE
+#define TCA_DUMP_FLAGS_TERSE (1 << 0)
+#endif
+#define ACT_MAX_NUM 1024
 #define TCA_ACT_MAX_NUM 16
+#define TCA_ACT_MIN_PRIO 1
 
 struct tcf_id {
     enum tc_qdisc_hook hook;
