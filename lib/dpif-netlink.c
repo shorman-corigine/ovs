@@ -49,6 +49,7 @@
 #include "netlink.h"
 #include "netnsid.h"
 #include "odp-util.h"
+#include "ofproto/ofproto-dpif.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/flow.h"
 #include "openvswitch/hmap.h"
@@ -4035,6 +4036,12 @@ dpif_netlink_meter_transact(struct ofpbuf *request, struct ofpbuf **replyp,
     return 0;
 }
 
+static const struct nl_policy police_policy[] = {
+    [TCA_POLICE_TBF] = { .type = NL_A_UNSPEC,
+                         .min_len = sizeof(struct tc_police),
+                         .optional = false, },
+};
+
 static void
 dpif_netlink_meter_get_features(const struct dpif *dpif_,
                                 struct ofputil_meter_features *features)
@@ -4292,6 +4299,170 @@ dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id meter_id,
     }
 
     return dpif_netlink_meter_set__(dpif_, meter_id, add, config);
+}
+
+static const struct nl_policy tca_root_policy[] = {
+    [TCA_ACT_TAB] = { .type = NL_A_NESTED, .optional = false },
+    [TCA_ROOT_COUNT] = { .type = NL_A_U32, .optional = false },
+};
+
+static const struct nl_policy act_policy[] = {
+    [TCA_ACT_KIND] = { .type = NL_A_STRING, .optional = false, },
+    [TCA_ACT_COOKIE] = { .type = NL_A_UNSPEC, .optional = true, },
+    [TCA_ACT_OPTIONS] = { .type = NL_A_NESTED, .optional = true, },
+    [TCA_ACT_STATS] = { .type = NL_A_NESTED, .optional = false, },
+};
+
+static bool dpif_netlink_meter_should_revalidate(struct dpif_backer *backer,
+                                                 uint32_t meter_id)
+{
+    return !id_pool_id_exist(backer->meter_ids, meter_id);
+}
+
+static void
+dpif_tc_meter_revalidate(struct dpif *dpif_ OVS_UNUSED,
+                         struct dpif_backer *backer, struct ofpbuf *reply)
+{
+    static struct nl_policy actions_orders_policy[ACT_MAX_NUM + 1] = {};
+    struct nlattr *actions_orders[ARRAY_SIZE(actions_orders_policy)];
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+    struct nlattr *action_root_attrs[ARRAY_SIZE(tca_root_policy)];
+    struct nlattr *action_police_tab[ARRAY_SIZE(police_policy)];
+    struct nlattr *action_police_attrs[ARRAY_SIZE(act_policy)];
+    const int max_size = ARRAY_SIZE(actions_orders_policy);
+    const struct tc_police *tc_police = NULL;
+    struct ofputil_meter_stats stats;
+    ofproto_meter_id meter_id;
+    size_t revalidate_num;
+    size_t act_count;
+    uint32_t index;
+    int i;
+
+    if (!reply) {
+        VLOG_ERR_RL(&rl, "get null reply message when meter revalidate \n");
+        return;
+    }
+
+    if (!nl_policy_parse(reply, NLMSG_HDRLEN + sizeof(struct tcamsg),
+                         tca_root_policy, action_root_attrs,
+                         ARRAY_SIZE(action_root_attrs))) {
+        VLOG_ERR_RL(&rl, "failed to parse reply message when meter "
+                    "revalidate \n");
+        return;
+    }
+
+    act_count = nl_attr_get_u32(action_root_attrs[TCA_ROOT_COUNT]);
+    if (!act_count) {
+        VLOG_ERR_RL(&rl, "there is no police action returned in message when "
+                    "meter revalidate \n");
+        return;
+    }
+
+    for (i = 0; i < max_size; i++) {
+        actions_orders_policy[i].type = NL_A_NESTED;
+        actions_orders_policy[i].optional = true;
+    }
+
+    revalidate_num = act_count > ACT_MAX_NUM ?
+                                (ACT_MAX_NUM + 1) : (act_count + 1);
+
+    if (!nl_parse_nested(action_root_attrs[TCA_ACT_TAB], actions_orders_policy,
+                         actions_orders, revalidate_num) ) {
+        VLOG_ERR_RL(&rl, "failed to parse TCA_ACT_TAB when meter revalidate "
+                    "for act_count %lu", act_count);
+        return;
+    }
+
+    for (i = 0; i < revalidate_num; i++) {
+        if (!actions_orders[i]) {
+            continue;
+        }
+
+        if (!nl_parse_nested(actions_orders[i], act_policy,
+                             action_police_attrs, ARRAY_SIZE(act_policy))) {
+            VLOG_ERR_RL(&rl, "failed to parse police action when meter "
+                      "revalidate\n");
+            return;
+        }
+        if (strcmp(nl_attr_get_string(action_police_attrs[TCA_KIND]),
+                                      "police")) {
+            VLOG_EMER("get none police action when meter revalidate\n");
+            continue;
+        }
+        if (!nl_parse_nested(action_police_attrs[TCA_ACT_OPTIONS],
+                             police_policy, action_police_tab,
+                             ARRAY_SIZE(action_police_tab))) {
+            VLOG_ERR_RL(&rl, "failed to parse the single police action when "
+                        "meter revalidate\n");
+            return;
+        }
+        tc_police = nl_attr_get_unspec(action_police_tab[TCA_POLICE_TBF],
+                                       sizeof *tc_police);
+        if (!tc_police) {
+            VLOG_ERR_RL(&rl, "can not get police struct in police order %u "
+                        "when meter revalidate\n", i);
+            continue;
+        }
+        index = tc_police->index;
+        if (UNLIKELY_METER_ACTION(index)) {
+            continue;
+        }
+
+        index = POLICY_INDEX_TO_METER_ID(index);
+        if (dpif_netlink_meter_should_revalidate(backer, index)) {
+            meter_id.uint32 = index;
+            VLOG_ERR_RL(&rl, "revalidate the meter id %u for police index "
+                        "%08x\n", index, tc_police->index);
+            dpif_netlink_meter_del_police(meter_id, &stats, 1);
+        }
+    }
+}
+
+static void
+dpif_netlink_meter_revalidate__(struct dpif *dpif_ OVS_UNUSED,
+                                struct dpif_backer *backer)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+    struct nla_bitfield32 dump_flags = { TCA_DUMP_FLAGS_TERSE,
+                                         TCA_DUMP_FLAGS_TERSE };
+    struct ofpbuf request;
+    struct ofpbuf *reply;
+    struct tcamsg *tcmsg;
+    size_t total_offset;
+    size_t act_offset;
+    int prio = 0;
+    int error;
+
+    if (!netdev_is_flow_api_enabled()) {
+        return;
+    }
+    tcmsg = tc_act_make_request(RTM_GETACTION, NLM_F_DUMP, &request);
+    if (!tcmsg) {
+        return;
+    }
+    dpif_netlink_police_start_nested(&request, &prio, &total_offset,
+                                     &act_offset);
+    nl_msg_put_string(&request, TCA_KIND, "police");
+    dpif_netlink_police_end_nested(&request, &total_offset, &act_offset);
+    nl_msg_put_unspec(&request, TCA_ROOT_FLAGS, &dump_flags,
+                      sizeof dump_flags);
+    error = tc_transact(&request, &reply);
+    if (error) {
+        VLOG_ERR_RL(&rl, "failed to send dump netlink msg for revalidate "
+                    "error %d\n", error);
+        return;
+    }
+    dpif_tc_meter_revalidate(dpif_, backer, reply);
+    ofpbuf_delete(reply);
+}
+
+static void
+dpif_netlink_meter_revalidate(struct dpif *dpif_, struct dpif_backer *backer)
+{
+    if (probe_broken_meters(dpif_)) {
+        return;
+    }
+    dpif_netlink_meter_revalidate__(dpif_, backer);
 }
 
 /* Retrieve statistics and/or delete meter 'meter_id'.  Statistics are
@@ -4617,6 +4788,7 @@ const struct dpif_class dpif_netlink_class = {
     dpif_netlink_meter_set,
     dpif_netlink_meter_get,
     dpif_netlink_meter_del,
+    dpif_netlink_meter_revalidate,
     NULL,                       /* bond_add */
     NULL,                       /* bond_del */
     NULL,                       /* bond_stats_get */
