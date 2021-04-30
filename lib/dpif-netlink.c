@@ -32,6 +32,7 @@
 #include <sys/epoll.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <linux/gen_stats.h>
 
 #include "bitmap.h"
 #include "dpif-netlink-rtnl.h"
@@ -4036,11 +4037,124 @@ dpif_netlink_meter_transact(struct ofpbuf *request, struct ofpbuf **replyp,
     return 0;
 }
 
+
+static const struct nl_policy tca_root_policy_[] = {
+    [TCA_ACT_TAB] = { .type = NL_A_NESTED, .optional = false },
+    [TCA_ROOT_COUNT] = { .type = NL_A_U32, .optional = true },
+};
+
+static const struct nl_policy act_policy_[] = {
+    [TCA_ACT_KIND] = { .type = NL_A_STRING, .optional = false, },
+    [TCA_ACT_COOKIE] = { .type = NL_A_UNSPEC, .optional = true, },
+    [TCA_ACT_OPTIONS] = { .type = NL_A_NESTED, .optional = true, },
+    [TCA_ACT_STATS] = { .type = NL_A_NESTED, .optional = true, },
+};
+
+static const struct nl_policy stats_policy[] = {
+    [TCA_STATS_BASIC] = { .type = NL_A_UNSPEC,
+                          .min_len = sizeof(struct gnet_stats_basic),
+                          .optional = false, },
+};
+
 static const struct nl_policy police_policy[] = {
     [TCA_POLICE_TBF] = { .type = NL_A_UNSPEC,
                          .min_len = sizeof(struct tc_police),
                          .optional = false, },
 };
+
+static int
+dpif_netlink_meter_transact_offloaded(ofproto_meter_id meter_id,
+                                      struct ofpbuf request,
+                                      struct ofpbuf **reply)
+{
+    uint32_t index = METER_ID_TO_POLICY_INDEX(meter_id.uint32);
+    size_t total_offset, basic_offset;
+    struct tcamsg *tcamsg;
+    int prio = 0;
+
+    tcamsg = tc_act_make_request(RTM_GETACTION, NLM_F_REQUEST, &request);
+    if (!tcamsg) {
+        return ENODEV;
+    }
+    dpif_netlink_police_start_nested(&request, &prio, &total_offset,
+                                     &basic_offset);
+    nl_msg_put_u32(&request, TCA_ACT_INDEX, index);
+    dpif_netlink_police_end_nested(&request, &total_offset, &basic_offset);
+
+    return tc_transact(&request, reply);
+}
+
+static int
+dpif_netlink_meter_get_stats_offloaded(ofproto_meter_id meter_id,
+                                       struct ovs_flow_stats *stats)
+{
+    static struct nl_policy actions_orders_policy[ACT_MAX_NUM + 1] = {};
+    struct nlattr *action_root_attrs_temp[ARRAY_SIZE(tca_root_policy_)];
+    struct nlattr *actions_orders[ARRAY_SIZE(actions_orders_policy)];
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+    struct nlattr *action_police_attrs[ARRAY_SIZE(act_policy_)];
+    const int max_size = ARRAY_SIZE(actions_orders_policy);
+    struct nlattr *stats_attrs[ARRAY_SIZE(stats_policy)];
+    const struct gnet_stats_basic *bs;
+    struct nlattr *act_stats;
+    struct ofpbuf request;
+    struct ofpbuf *reply;
+    int i, err;
+
+    err = dpif_netlink_meter_transact_offloaded(meter_id, request, &reply);
+    if (err) {
+        VLOG_ERR_RL(&rl, "failed to send get-action netlink msg : %d", err);
+        goto err_out;
+    }
+
+    /*parse reply from ofpbuf to *nlattr[]   */
+    if (!nl_policy_parse(reply, NLMSG_HDRLEN + sizeof(struct tcamsg),
+                         tca_root_policy_, action_root_attrs_temp,
+                         ARRAY_SIZE(action_root_attrs_temp))) {
+        VLOG_ERR_RL(&rl, "failed to parse reply message");
+        err = EINVAL;
+        goto err_out;
+    }
+
+    for (i = 0; i < max_size; i++) {
+        actions_orders_policy[i].type = NL_A_NESTED;
+        actions_orders_policy[i].optional = true;
+    }
+
+    if (!nl_parse_nested(action_root_attrs_temp[TCA_ACT_TAB],
+                         actions_orders_policy,
+                         actions_orders, ACT_MAX_NUM + 1)) {
+        VLOG_ERR_RL(&rl, "failed to parse TCA_ACT_TAB");
+        err =  EPROTO;
+        goto err_out;
+    }
+
+    if (!nl_parse_nested(actions_orders[1], act_policy_, action_police_attrs,
+                             ARRAY_SIZE(act_policy_)) ) {
+        VLOG_ERR_RL(&rl, "failed to parse action when getting meter stats");
+        err =  EPROTO;
+        goto err_out;
+    }
+
+    act_stats = action_police_attrs[TCA_ACT_STATS];
+
+    if (!nl_parse_nested(act_stats, stats_policy, stats_attrs,
+                         ARRAY_SIZE(stats_policy))) {
+        VLOG_ERR_RL(&rl, "failed to parse action stats policy");
+        err = EPROTO;
+        goto err_out;
+    }
+
+    bs = nl_attr_get_unspec(stats_attrs[TCA_STATS_BASIC], sizeof *bs);
+    if (bs->packets) {
+        put_32aligned_u64(&stats->n_packets, bs->packets);
+        put_32aligned_u64(&stats->n_bytes, bs->bytes);
+    }
+
+err_out:
+    ofpbuf_delete(reply);
+    return err;
+}
 
 static void
 dpif_netlink_meter_get_features(const struct dpif *dpif_,
@@ -4478,8 +4592,13 @@ dpif_netlink_meter_get_stats(const struct dpif *dpif_,
                              enum ovs_meter_cmd command)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
+    struct ovs_flow_stats stats_t;
+    struct ovs_flow_stats *stats_offload = &stats_t;
     struct ofpbuf buf, *msg;
     uint64_t stub[1024 / 8];
+    int error;
+
+    memset(&stats_t, 0, sizeof(struct ovs_flow_stats));
 
     static const struct nl_policy ovs_meter_stats_policy[] = {
         [OVS_METER_ATTR_ID] = { .type = NL_A_U32, .optional = true},
@@ -4493,14 +4612,18 @@ dpif_netlink_meter_get_stats(const struct dpif *dpif_,
 
     nl_msg_put_u32(&buf, OVS_METER_ATTR_ID, meter_id.uint32);
 
-    int error = dpif_netlink_meter_transact(&buf, &msg,
-                                            ovs_meter_stats_policy, a,
-                                            ARRAY_SIZE(ovs_meter_stats_policy));
+    error = dpif_netlink_meter_transact(&buf, &msg,
+                                        ovs_meter_stats_policy, a,
+                                        ARRAY_SIZE(ovs_meter_stats_policy));
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_INFO_RL(&rl, "dpif_netlink_meter_transact %s failed",
                      command == OVS_METER_CMD_GET ? "get" : "del");
         return error;
+    }
+
+    if (netdev_is_flow_api_enabled()) {
+        dpif_netlink_meter_get_stats_offloaded(meter_id, stats_offload);
     }
 
     if (stats
@@ -4515,6 +4638,13 @@ dpif_netlink_meter_get_stats(const struct dpif *dpif_,
         stat = nl_attr_get(a[OVS_METER_ATTR_STATS]);
         stats->packet_in_count = get_32aligned_u64(&stat->n_packets);
         stats->byte_in_count = get_32aligned_u64(&stat->n_bytes);
+
+        if (netdev_is_flow_api_enabled()) {
+            stats->packet_in_count +=
+                                get_32aligned_u64(&stats_offload->n_packets);
+            stats->byte_in_count +=
+                                get_32aligned_u64(&stats_offload->n_bytes);
+        }
 
         if (a[OVS_METER_ATTR_BANDS]) {
             size_t n_bands = 0;
