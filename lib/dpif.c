@@ -2058,3 +2058,9 @@ dpif_get_n_offloaded_flows(struct dpif *dpif, uint64_t *n_flows)
     }
     return n_devs ? 0 : EOPNOTSUPP;
 }
+
+void
+dpif_meter_revalidate(struct dpif *dpif, struct dpif_backer *backer)
+{
+    dpif->dpif_class->meter_revalidate(dpif, backer);
+}
