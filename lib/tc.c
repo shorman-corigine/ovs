@@ -1821,8 +1821,6 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
     return 0;
 }
 
-#define TCA_ACT_MIN_PRIO 1
-
 static int
 nl_parse_flower_actions(struct nlattr **attrs, struct tc_flower *flower,
                         bool terse)

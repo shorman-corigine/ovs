@@ -58,6 +58,8 @@ enum tc_flower_reserved_prio {
 #define METER_ID_TO_POLICY_INDEX(meter_id) 0xff << 24 | (meter_id + 1) << 8
 /* Mapping policy_index to meter_id */
 #define POLICY_INDEX_TO_METER_ID(index) ((index >> 8) & 0xffff) - 1
+/* Ckeck if given policy action is meter action*/
+#define UNLIKELY_METER_ACTION(index) !(index & (0xff << 24)) || !((index >> 8) & 0xffff)
 
 enum tc_qdisc_hook {
     TC_INGRESS,
@@ -285,7 +287,12 @@ enum tc_offloaded_state {
     TC_OFFLOADED_STATE_NOT_IN_HW,
 };
 
+#ifndef TCA_DUMP_FLAGS_TERSE
+#define TCA_DUMP_FLAGS_TERSE (1 << 0)
+#endif
+#define ACT_MAX_NUM 1024
 #define TCA_ACT_MAX_NUM 16
+#define TCA_ACT_MIN_PRIO 1
 
 struct tcf_id {
     enum tc_qdisc_hook hook;
