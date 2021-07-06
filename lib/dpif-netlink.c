@@ -2509,17 +2509,17 @@ dpif_netlink_refresh_handlers_cpu_dispatch(struct dpif_netlink *dpif)
 {
     int handler_id;
     int error = 0;
-    uint32_t n_handlers;
+    uint32_t n_handlers_;
     uint32_t *upcall_pids;
 
-    n_handlers = count_cpu_cores();
-    if (dpif->n_handlers != n_handlers) {
+    n_handlers_ = count_cpu_cores();
+    if (dpif->n_handlers != n_handlers_) {
         VLOG_DBG("Dispatch mode(per-cpu): initializing %d handlers",
-                   n_handlers);
+                   n_handlers_);
         destroy_all_handlers(dpif);
-        upcall_pids = xzalloc(n_handlers * sizeof *upcall_pids);
-        dpif->handlers = xzalloc(n_handlers * sizeof *dpif->handlers);
-        for (handler_id = 0; handler_id < n_handlers; handler_id++) {
+        upcall_pids = xzalloc(n_handlers_ * sizeof *upcall_pids);
+        dpif->handlers = xzalloc(n_handlers_ * sizeof *dpif->handlers);
+        for (handler_id = 0; handler_id < n_handlers_; handler_id++) {
             struct dpif_handler *handler = &dpif->handlers[handler_id];
             error = create_nl_sock(dpif, &handler->sock);
             if (error) {
@@ -2533,9 +2533,9 @@ dpif_netlink_refresh_handlers_cpu_dispatch(struct dpif_netlink *dpif)
                       handler_id, upcall_pids[handler_id]);
         }
 
-        dpif->n_handlers = n_handlers;
+        dpif->n_handlers = n_handlers_;
         error = dpif_netlink_set_handler_pids(&dpif->dpif, upcall_pids,
-                                              n_handlers);
+                                              n_handlers_);
         free(upcall_pids);
     }
     return error;
@@ -2547,7 +2547,7 @@ dpif_netlink_refresh_handlers_cpu_dispatch(struct dpif_netlink *dpif)
  * backing kernel vports. */
 static int
 dpif_netlink_refresh_handlers_vport_dispatch(struct dpif_netlink *dpif,
-                                             uint32_t n_handlers)
+                                             uint32_t n_handlers_)
     OVS_REQ_WRLOCK(dpif->upcall_lock)
 {
     unsigned long int *keep_channels;
@@ -2559,13 +2559,13 @@ dpif_netlink_refresh_handlers_vport_dispatch(struct dpif_netlink *dpif,
     int retval = 0;
     size_t i;
 
-    ovs_assert(!WINDOWS || n_handlers <= 1);
+    ovs_assert(!WINDOWS || n_handlers_ <= 1);
     ovs_assert(!WINDOWS || dpif->n_handlers <= 1);
 
-    if (dpif->n_handlers != n_handlers) {
+    if (dpif->n_handlers != n_handlers_) {
         destroy_all_channels(dpif);
-        dpif->handlers = xzalloc(n_handlers * sizeof *dpif->handlers);
-        for (i = 0; i < n_handlers; i++) {
+        dpif->handlers = xzalloc(n_handlers_ * sizeof *dpif->handlers);
+        for (i = 0; i < n_handlers_; i++) {
             int error;
             struct dpif_handler *handler = &dpif->handlers[i];
 
@@ -2583,10 +2583,10 @@ dpif_netlink_refresh_handlers_vport_dispatch(struct dpif_netlink *dpif,
                 return error;
             }
         }
-        dpif->n_handlers = n_handlers;
+        dpif->n_handlers = n_handlers_;
     }
 
-    for (i = 0; i < n_handlers; i++) {
+    for (i = 0; i < n_handlers_; i++) {
         struct dpif_handler *handler = &dpif->handlers[i];
 
         handler->event_offset = handler->n_events = 0;
@@ -2719,7 +2719,7 @@ dpif_netlink_recv_set(struct dpif *dpif_, bool enable)
 }
 
 static int
-dpif_netlink_handlers_set(struct dpif *dpif_, uint32_t n_handlers)
+dpif_netlink_handlers_set(struct dpif *dpif_, uint32_t n_handlers_)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     int error = 0;
@@ -2738,7 +2738,7 @@ dpif_netlink_handlers_set(struct dpif *dpif_, uint32_t n_handlers)
             error = dpif_netlink_refresh_handlers_cpu_dispatch(dpif);
         } else {
             error = dpif_netlink_refresh_handlers_vport_dispatch(dpif,
-                                                                 n_handlers);
+                                                                 n_handlers_);
         }
     }
     fat_rwlock_unlock(&dpif->upcall_lock);
@@ -2747,12 +2747,12 @@ dpif_netlink_handlers_set(struct dpif *dpif_, uint32_t n_handlers)
 }
 
 static bool
-dpif_netlink_number_handlers_required(struct dpif *dpif_, uint32_t *n_handlers)
+dpif_netlink_number_handlers_required(struct dpif *dpif_, uint32_t *n_handlers_)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
 
     if (dpif_netlink_upcall_per_cpu(dpif)) {
-        *n_handlers = count_cpu_cores();
+        *n_handlers_ = count_cpu_cores();
         return true;
     }
 
