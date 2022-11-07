@@ -75,6 +75,39 @@ struct netdev_offload_dpdk_data {
     struct ovs_mutex map_lock;
 };
 
+static struct ovs_mutex netdev_meter_mutex = OVS_MUTEX_INITIALIZER;
+
+static struct cmap netdev_meter = CMAP_INITIALIZER;
+
+struct dpdk_meter_proxy {
+    int proxy_id;
+    uint64_t refcnt;
+    /* In meter_id_to_meter_data's "meter_relate_proxy" list. */
+    struct ovs_list node;
+};
+
+struct meter_id_to_meter_data {
+    struct ovs_list meter_relate_proxy;
+    struct cmap_node cmap_node;
+    ofproto_meter_id meter_id;
+    uint64_t burst;
+    uint64_t rate;
+    int flag;
+};
+
+static struct meter_id_to_meter_data *
+netdev_lookup_meter_data(const uint32_t meter_id)
+{
+    struct meter_id_to_meter_data *meter_data;
+    CMAP_FOR_EACH_WITH_HASH (meter_data, cmap_node, meter_id,
+                             &netdev_meter) {
+        if (meter_id == meter_data->meter_id.uint32) {
+            return meter_data;
+        }
+    }
+    return NULL;
+}
+
 static int
 offload_data_init(struct netdev *netdev)
 {
@@ -2456,6 +2489,161 @@ netdev_offload_dpdk_flow_del(struct netdev *netdev OVS_UNUSED,
     return netdev_offload_dpdk_flow_destroy(rte_flow_data);
 }
 
+static void
+netdev_offload_dpdk_meter_update(uint64_t rate, uint64_t burst,
+                            uint32_t mid, int flag,
+                            struct meter_id_to_meter_data *meter_data)
+{
+    struct dpdk_meter_proxy *dmp;
+    int ret;
+
+    meter_data->rate = rate;
+    meter_data->burst = burst;
+    meter_data->flag = flag;
+
+    LIST_FOR_EACH (dmp, node, &meter_data->meter_relate_proxy) {
+        if (!dmp->refcnt) {
+            continue;
+        }
+
+        ret = netdev_dpdk_meter_create(dmp->proxy_id, mid, rate, burst, flag);
+        if (ret) {
+            VLOG_ERR("Failed update the meter %u to the port %d",
+                     mid, dmp->proxy_id);
+        }
+    }
+}
+
+static int
+netdev_offload_dpdk_meter_set(const char *dpif_type,
+                              ofproto_meter_id meter_id,
+                              struct ofputil_meter_config *config)
+{
+    struct meter_id_to_meter_data *meter_data;
+    uint32_t mid = meter_id.uint32;
+    uint64_t burst;
+    uint64_t rate;
+    int flag;
+
+    if (!strcmp(dpif_type, "system")) {
+         VLOG_DBG("meter belongs to the system datapath. Skipping.");
+         return EOPNOTSUPP;
+    }
+
+    if (config->n_bands != 1 || config->bands[0].type != OFPMBT13_DROP) {
+        return 0;
+    }
+
+    if (!(config->flags & (OFPMF13_KBPS | OFPMF13_PKTPS))) {
+        return EBADF;
+    }
+
+    flag = !(config->flags & OFPMF13_KBPS);
+    rate = config->bands[0].rate;
+    burst = config->bands[0].burst_size;
+    if (flag == 0) {
+        rate *= 1024 / 8;
+        burst *= 1024 / 8;
+    }
+
+    if (!config->bands[0].burst_size) {
+        burst = rate / 5;
+    }
+
+    ovs_mutex_lock(&netdev_meter_mutex);
+    meter_data = netdev_lookup_meter_data(meter_id.uint32);
+    if (meter_data != NULL) {
+        netdev_offload_dpdk_meter_update(rate, burst, flag, mid, meter_data);
+        goto out;
+    }
+
+    meter_data = xmalloc(sizeof *meter_data);
+    meter_data->meter_id = meter_id;
+    meter_data->rate = rate;
+    meter_data->burst = burst;
+    meter_data->flag = flag;
+    ovs_list_init(&meter_data->meter_relate_proxy);
+    cmap_insert(&netdev_meter, &meter_data->cmap_node, meter_id.uint32);
+    VLOG_DBG("netdev: meter '%u' is stored .", meter_id.uint32);
+
+out:
+    ovs_mutex_unlock(&netdev_meter_mutex);
+    return 0;
+}
+
+static int
+netdev_offload_dpdk_meter_del(const char *dpif_type,
+                              ofproto_meter_id meter_id,
+                              struct ofputil_meter_stats *stats)
+{
+    struct meter_id_to_meter_data *meter_data;
+
+    if (!strcmp(dpif_type, "system")) {
+         VLOG_DBG("meter belongs to the system datapath. Skipping.");
+         return EOPNOTSUPP;
+    }
+
+    ovs_mutex_lock(&netdev_meter_mutex);
+    meter_data = netdev_lookup_meter_data(meter_id.uint32);
+    if (meter_data == NULL) {
+        VLOG_WARN("attempted to remove meter data that is not exist: %u",
+                  meter_id.uint32);
+        goto out;
+    }
+
+    cmap_remove(&netdev_meter, &meter_data->cmap_node, meter_id.uint32);
+    ovsrcu_postpone(free, meter_data);
+    if (stats) {
+        memset(stats, 0, sizeof *stats);
+    }
+
+out:
+    ovs_mutex_unlock(&netdev_meter_mutex);
+    return 0;
+}
+
+static int
+netdev_offload_dpdk_meter_get(const char *dpif_type,
+                              ofproto_meter_id meter_id,
+                              struct ofputil_meter_stats *stats)
+{
+    struct meter_id_to_meter_data *meter_data;
+    struct dpdk_meter_proxy *dmp;
+    uint64_t packet_in_count;
+    uint64_t byte_in_count;
+    int ret = 0;
+
+    if (!strcmp(dpif_type, "system")) {
+         VLOG_DBG("meter belongs to the system datapath. Skipping.");
+         return EOPNOTSUPP;
+    }
+
+    ovs_mutex_lock(&netdev_meter_mutex);
+    meter_data = netdev_lookup_meter_data(meter_id.uint32);
+    if (meter_data == NULL) {
+        VLOG_WARN("attempted to get meter status that is not exist: %u",
+                  meter_id.uint32);
+        goto out;
+    }
+
+    LIST_FOR_EACH (dmp, node, &meter_data->meter_relate_proxy) {
+        byte_in_count = 0;
+        packet_in_count = 0;
+        ret = netdev_dpdk_meter_get(dmp->proxy_id, meter_id.uint32,
+                                    &byte_in_count, &packet_in_count);
+        if (ret) {
+            VLOG_ERR("Failed get the meter frome the port %d", dmp->proxy_id);
+        }
+
+        stats->byte_in_count += byte_in_count;
+        stats->packet_in_count += packet_in_count;
+    }
+
+out:
+    ovs_mutex_unlock(&netdev_meter_mutex);
+    return ret;
+}
+
 static int
 netdev_offload_dpdk_init_flow_api(struct netdev *netdev)
 {
@@ -2742,6 +2930,9 @@ const struct netdev_flow_api netdev_offload_dpdk = {
     .type = "dpdk_flow_api",
     .flow_put = netdev_offload_dpdk_flow_put,
     .flow_del = netdev_offload_dpdk_flow_del,
+    .meter_set = netdev_offload_dpdk_meter_set,
+    .meter_get = netdev_offload_dpdk_meter_get,
+    .meter_del = netdev_offload_dpdk_meter_del,
     .init_flow_api = netdev_offload_dpdk_init_flow_api,
     .uninit_flow_api = netdev_offload_dpdk_uninit_flow_api,
     .flow_get = netdev_offload_dpdk_flow_get,

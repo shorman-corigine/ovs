@@ -37,6 +37,7 @@
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
 #include <rte_meter.h>
+#include <rte_mtr.h>
 #include <rte_pci.h>
 #include <rte_version.h>
 #include <rte_vhost.h>
@@ -5341,7 +5342,197 @@ netdev_dpdk_rte_flow_query_count(struct netdev *netdev,
     return ret;
 }
 
+static int OVS_UNUSED
+netdev_dpdk_meter_profile_init(struct rte_mtr_meter_profile *profile,
+                               struct rte_mtr_capabilities *cap,
+                               const uint64_t rate,
+                               const uint64_t burst,
+                               const int flag)
+{
+    if (!cap->meter_srtcm_rfc2697_n_max) {
+        return EOPNOTSUPP;
+    }
+
+    profile->alg = RTE_MTR_SRTCM_RFC2697;
+    profile->packet_mode = flag;
+    profile->srtcm_rfc2697.cir = rate;
+    profile->srtcm_rfc2697.cbs = burst;
+    profile->srtcm_rfc2697.ebs = burst;
+
+    return 0;
+}
+
 #ifdef ALLOW_EXPERIMENTAL_API
+
+static int
+netdev_dpdk_rte_mtr_meter_add(struct rte_mtr_meter_profile *profile,
+                              const int proxy_port_id,
+                              uint32_t meter_id,
+                              const uint32_t rate,
+                              const uint32_t burst,
+                              const int flag,
+                              struct rte_mtr_error *error)
+{
+    uint32_t meter_profile_id = meter_id;
+    uint32_t meter_policy_id = meter_id;
+    struct rte_mtr_capabilities cap;
+    struct rte_mtr_stats mtr_stats;
+    struct rte_mtr_params params;
+    uint64_t stats_mask = 0;
+    int clear = 0;
+    int mod;
+    int ret;
+
+    memset(&mtr_stats, 0, sizeof(struct rte_mtr_stats));
+    memset(&cap, 0, sizeof(cap));
+
+    ret = rte_mtr_capabilities_get(proxy_port_id, &cap, error);
+    if (ret) {
+        return ret;
+    }
+
+    ret = netdev_dpdk_meter_profile_init(profile, &cap, rate, burst, flag);
+    if (ret) {
+        return ret;
+    }
+
+    /* If can get the meter stats, the meter is offload in the HW.
+     * So the operate is mod, just update the meter_profile.
+     *
+     * If can't get the meter stats, the meter is not offload in the HW.
+     * So the operate is add, need create the profile, policy, mtr. */
+    mod = rte_mtr_stats_read(proxy_port_id, meter_id, &mtr_stats, &stats_mask,
+                             clear, error);
+    ret = rte_mtr_meter_profile_add(proxy_port_id, meter_profile_id, profile,
+                                    error);
+    if (!mod || ret) {
+        return ret;
+    }
+
+    rte_mtr_policy_drop_red(policy);
+    ret = rte_mtr_meter_policy_add(proxy_port_id, meter_policy_id, &policy,
+                                   error);
+
+    if (ret) {
+        return ret;
+    }
+
+    memset(&params, 0 , sizeof(struct rte_mtr_params));
+    params.meter_profile_id = meter_profile_id;
+    params.meter_policy_id = meter_policy_id;
+    params.stats_mask = cap.stats_mask;
+    params.meter_enable = 1;
+
+    ret = rte_mtr_create(proxy_port_id, meter_id, &params, 1, error);
+    return ret;
+}
+
+int
+netdev_dpdk_meter_create(const int proxy_port_id,
+                         const uint32_t meter_profile_id,
+                         const uint64_t rate,
+                         const uint64_t burst,
+                         const int flag)
+{
+    struct rte_mtr_meter_profile profile;
+    struct rte_mtr_error error;
+    int ret;
+
+    memset(&profile, 0 , sizeof(struct rte_mtr_meter_profile));
+    memset(&error, 0 , sizeof(struct rte_mtr_error));
+
+    ret = netdev_dpdk_rte_mtr_meter_add(&profile, proxy_port_id,
+                                        meter_profile_id, rate, burst, flag,
+                                        &error);
+    if (ret) {
+        VLOG_DBG("port %d: rte_mtr creation failed: %u (%s).", proxy_port_id,
+                 error.type, error.message);
+        return ret;
+    }
+
+    VLOG_DBG("port %d: rte_meter_id %u mtr create ", proxy_port_id,
+             meter_profile_id);
+
+    return ret;
+}
+
+int
+netdev_dpdk_meter_del(const int proxy_port_id,
+                      const uint32_t meter_id,
+                      const uint32_t meter_profile_id,
+                      const uint32_t meter_policy_id)
+{
+    struct rte_mtr_stats mtr_stats;
+    struct rte_mtr_error error;
+    uint64_t stats_mask = 0;
+    int clear = 0;
+    int ret = 0 ;
+
+    memset(&mtr_stats, 0, sizeof(struct rte_mtr_stats));
+    memset(&error, 0 , sizeof(struct rte_mtr_error));
+
+    ret = rte_mtr_stats_read(proxy_port_id, meter_id, &mtr_stats, &stats_mask,
+                             clear, &error);
+    if (ret) {
+        VLOG_DBG("port %d: rte_mtr find mtr_id %d failed: %d (%s).",
+                 proxy_port_id, meter_id, error.type, error.message);
+        return ret;
+    }
+
+    ret = rte_mtr_destroy(proxy_port_id, meter_id, &error);
+    if (ret) {
+        VLOG_DBG("port %d: rte_mtr delete mtr_id %d failed: %d (%s).",
+                 proxy_port_id, meter_id, error.type, error.message);
+        return ret;
+    }
+
+    ret = rte_mtr_meter_policy_delete(proxy_port_id, meter_policy_id, &error);
+    if (ret) {
+        VLOG_DBG("port %d: rte_mtr delete meter_policy %d failed: %d (%s).",
+                 proxy_port_id, meter_policy_id, error.type, error.message);
+        return ret;
+    }
+
+    ret = rte_mtr_meter_profile_delete(proxy_port_id, meter_profile_id,
+                                       &error);
+    if (ret) {
+        VLOG_DBG("port %d: rte_mtr delete meter_profile %d failed: %d (%s).",
+                 proxy_port_id, meter_profile_id, error.type, error.message);
+    }
+
+    return ret;
+}
+
+int
+netdev_dpdk_meter_get(const int proxy_port_id,
+                      const uint32_t meter_id,
+                      uint64_t *byte_in_count,
+                      uint64_t *packet_in_count)
+{
+    struct rte_mtr_stats mtr_stats;
+    struct rte_mtr_error error;
+    uint64_t stats_mask = 0;
+    int clear = 0;
+    int ret = 0 ;
+
+    memset(&mtr_stats, 0, sizeof(struct rte_mtr_stats));
+    memset(&error, 0, sizeof(struct rte_mtr_error));
+
+    ret = rte_mtr_stats_read(proxy_port_id, meter_id,
+                             &mtr_stats, &stats_mask, clear, &error);
+    if (ret) {
+        VLOG_DBG("port %d: rte_mtr get mtr_id %d stats failed: %d (%s).",
+                 proxy_port_id, meter_id, error.type, error.message);
+        return ret;
+    }
+
+    *byte_in_count = mtr_stats.n_bytes[RTE_COLOR_GREEN];
+    *packet_in_count = mtr_stats.n_pkts[RTE_COLOR_GREEN];
+    VLOG_DBG("port %d: rte_meter_id %d mtr get stats success ", proxy_port_id,
+             meter_id);
+
+    return ret;
+}
 
 int
 netdev_dpdk_rte_flow_tunnel_decap_set(struct netdev *netdev,
