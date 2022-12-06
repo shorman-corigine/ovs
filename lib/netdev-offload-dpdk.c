@@ -35,6 +35,8 @@
 #include "packets.h"
 #include "uuid.h"
 
+#define MAX_METERS 1 << 18
+
 VLOG_DEFINE_THIS_MODULE(netdev_offload_dpdk);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(600, 600);
 
@@ -66,6 +68,7 @@ struct ufid_to_rte_flow_data {
     struct netdev *physdev;
     struct ovs_mutex lock;
     unsigned int creation_tid;
+    uint32_t meter_id;
     bool dead;
 };
 
@@ -94,6 +97,19 @@ struct meter_id_to_meter_data {
     uint64_t rate;
     int flag;
 };
+
+static struct dpdk_meter_proxy *
+netdev_lookup_meter_proxy(const int proxy_id,
+                         struct meter_id_to_meter_data *meter_data)
+{
+    struct dpdk_meter_proxy *dmp;
+    LIST_FOR_EACH (dmp, node, &meter_data->meter_relate_proxy) {
+        if (proxy_id == dmp->proxy_id) {
+            return dmp;
+        }
+    }
+    return NULL;
+}
 
 static struct meter_id_to_meter_data *
 netdev_lookup_meter_data(const uint32_t meter_id)
@@ -246,7 +262,7 @@ ufid_to_rte_flow_data_find_protected(struct netdev *netdev,
 static inline struct ufid_to_rte_flow_data *
 ufid_to_rte_flow_associate(const ovs_u128 *ufid, struct netdev *netdev,
                            struct netdev *physdev, struct rte_flow *rte_flow,
-                           bool actions_offloaded)
+                           bool actions_offloaded, uint32_t meter_id)
 {
     size_t hash = hash_bytes(ufid, sizeof *ufid, 0);
     struct cmap *map = offload_data_map(netdev);
@@ -277,6 +293,7 @@ ufid_to_rte_flow_associate(const ovs_u128 *ufid, struct netdev *netdev,
     data->physdev = netdev != physdev ? netdev_ref(physdev) : physdev;
     data->rte_flow = rte_flow;
     data->actions_offloaded = actions_offloaded;
+    data->meter_id = meter_id;
     data->creation_tid = netdev_offload_thread_id();
     ovs_mutex_init(&data->lock);
 
@@ -2149,6 +2166,50 @@ parse_clone_actions(struct netdev *netdev,
     return 0;
 }
 
+static void OVS_UNUSED
+parse_meter_action(struct netdev *netdev, struct flow_actions *actions,
+                   uint32_t meter_id)
+{
+    struct meter_id_to_meter_data *meter_data;
+    struct rte_flow_action_meter *rte_meter;
+    struct dpdk_meter_proxy *dmp;
+    int proxy_id;
+
+    ovs_mutex_lock(&netdev_meter_mutex);
+    meter_data = netdev_lookup_meter_data(meter_id);
+    ovs_mutex_unlock(&netdev_meter_mutex);
+    if (meter_data == NULL) {
+        VLOG_DBG("netdev: meter '%u can't be found.", meter_id);
+        goto parse_meter;
+    }
+
+    proxy_id = netdev_dpdk_get_prox_port_id(netdev);
+
+    ovs_mutex_lock(&netdev_meter_mutex);
+    dmp = netdev_lookup_meter_proxy(proxy_id, meter_data);
+    if (dmp != NULL) {
+        dmp->refcnt++;
+        goto out_unlock;
+    }
+
+    dmp = (struct dpdk_meter_proxy *) xmalloc(sizeof(struct dpdk_meter_proxy));
+    dmp->proxy_id = netdev_dpdk_get_prox_port_id(netdev);
+    dmp->refcnt = 1;
+    ovs_list_insert(&meter_data->meter_relate_proxy, &dmp->node);
+
+    if (netdev_dpdk_meter_create(proxy_id, meter_id, meter_data->rate,
+                                 meter_data->burst, meter_data->flag)) {
+        VLOG_ERR("Failed offload the flow to the %s", netdev->name);
+    }
+
+out_unlock:
+    ovs_mutex_unlock(&netdev_meter_mutex);
+parse_meter:
+    rte_meter = xzalloc(sizeof *rte_meter);
+    rte_meter->mtr_id = meter_id;
+    add_flow_action(actions, RTE_FLOW_ACTION_TYPE_METER, rte_meter);
+}
+
 static void
 add_jump_action(struct flow_actions *actions, uint32_t group)
 {
@@ -2206,7 +2267,8 @@ static int
 parse_flow_actions(struct netdev *netdev,
                    struct flow_actions *actions,
                    struct nlattr *nl_actions,
-                   size_t nl_actions_len)
+                   size_t nl_actions_len,
+                   uint32_t *meter_id OVS_UNUSED)
 {
     struct nlattr *nla;
     size_t left;
@@ -2255,6 +2317,9 @@ parse_flow_actions(struct netdev *netdev,
             if (add_tnl_pop_action(netdev, actions, nla)) {
                 return -1;
             }
+        }  else if (nl_attr_type(nla) == OVS_ACTION_ATTR_METER) {
+            *meter_id =  nl_attr_get_u32(nla);
+            parse_meter_action(netdev, actions, *meter_id);
 #endif
         } else {
             VLOG_DBG_RL(&rl, "Unsupported action type %d", nl_attr_type(nla));
@@ -2275,7 +2340,8 @@ static struct rte_flow *
 netdev_offload_dpdk_actions(struct netdev *netdev,
                             struct flow_patterns *patterns,
                             struct nlattr *nl_actions,
-                            size_t actions_len)
+                            size_t actions_len,
+                            uint32_t *meter_id)
 {
     const struct rte_flow_attr flow_attr = { .transfer = 1 };
     struct flow_actions actions = {
@@ -2287,7 +2353,8 @@ netdev_offload_dpdk_actions(struct netdev *netdev,
     struct rte_flow_error error;
     int ret;
 
-    ret = parse_flow_actions(netdev, &actions, nl_actions, actions_len);
+    ret = parse_flow_actions(netdev, &actions, nl_actions, actions_len,
+                             meter_id);
     if (ret) {
         goto out;
     }
@@ -2312,6 +2379,7 @@ netdev_offload_dpdk_add_flow(struct netdev *netdev,
         .s_tnl = DS_EMPTY_INITIALIZER,
     };
     struct ufid_to_rte_flow_data *flows_data = NULL;
+    uint32_t meter_id = MAX_METERS;
     bool actions_offloaded = true;
     struct rte_flow *flow;
 
@@ -2322,7 +2390,7 @@ netdev_offload_dpdk_add_flow(struct netdev *netdev,
     }
 
     flow = netdev_offload_dpdk_actions(patterns.physdev, &patterns, nl_actions,
-                                       actions_len);
+                                       actions_len, &meter_id);
     if (!flow && !netdev_vport_is_vport_class(netdev->netdev_class)) {
         /* If we failed to offload the rule actions fallback to MARK+RSS
          * actions.
@@ -2336,7 +2404,7 @@ netdev_offload_dpdk_add_flow(struct netdev *netdev,
         goto out;
     }
     flows_data = ufid_to_rte_flow_associate(ufid, netdev, patterns.physdev,
-                                            flow, actions_offloaded);
+                                            flow, actions_offloaded, meter_id);
     VLOG_DBG("%s/%s: installed flow %p by ufid "UUID_FMT,
              netdev_get_name(netdev), netdev_get_name(patterns.physdev), flow,
              UUID_ARGS((struct uuid *) ufid));
@@ -2346,6 +2414,53 @@ out:
     return flows_data;
 }
 
+static void
+netdev_dpdk_rte_mtr_del(uint32_t meter_id, struct netdev *netdev)
+{
+    struct meter_id_to_meter_data *meter_data;
+    uint32_t meter_profile_id = meter_id;
+    uint32_t meter_policy_id = meter_id;
+    struct dpdk_meter_proxy *dmp;
+    int proxy_id;
+
+    if (meter_id >= MAX_METERS) {
+        return;
+    }
+
+    ovs_mutex_lock(&netdev_meter_mutex);
+    meter_data = netdev_lookup_meter_data(meter_id);
+    ovs_mutex_unlock(&netdev_meter_mutex);
+
+    if (meter_data == NULL) {
+        VLOG_DBG("netdev: meter '%u' can't be found.", meter_id);
+        return;
+    }
+
+    proxy_id = netdev_dpdk_get_prox_port_id(netdev);
+
+    ovs_mutex_lock(&netdev_meter_mutex);
+        dmp = netdev_lookup_meter_proxy(proxy_id, meter_data);
+        if (dmp == NULL) {
+            VLOG_ERR("Failed get the meter data from the %s", netdev->name);
+            goto out_unlock;
+        }
+
+        dmp->refcnt--;
+        if (dmp->refcnt) {
+            goto out_unlock;
+        }
+
+        ovs_list_moved(&meter_data->meter_relate_proxy, &dmp->node);
+        if (netdev_dpdk_meter_del(proxy_id, meter_id, meter_profile_id,
+                                  meter_policy_id)) {
+            VLOG_ERR("Failed delete the meter %u from the %s", meter_id,
+                     netdev->name);
+        }
+
+out_unlock:
+    ovs_mutex_unlock(&netdev_meter_mutex);
+}
+
 static int
 netdev_offload_dpdk_flow_destroy(struct ufid_to_rte_flow_data *rte_flow_data)
 {
@@ -2353,6 +2468,7 @@ netdev_offload_dpdk_flow_destroy(struct ufid_to_rte_flow_data *rte_flow_data)
     struct rte_flow *rte_flow;
     struct netdev *physdev;
     struct netdev *netdev;
+    uint32_t meter_id;
     ovs_u128 *ufid;
     bool transfer;
     int ret;
@@ -2371,10 +2487,13 @@ netdev_offload_dpdk_flow_destroy(struct ufid_to_rte_flow_data *rte_flow_data)
     physdev = rte_flow_data->physdev;
     netdev = rte_flow_data->netdev;
     ufid = &rte_flow_data->ufid;
+    meter_id = rte_flow_data->meter_id;
 
     ret = netdev_dpdk_rte_flow_destroy(physdev, transfer, rte_flow, &error);
 
     if (ret == 0) {
+        netdev_dpdk_rte_mtr_del(meter_id, netdev);
+
         struct netdev_offload_dpdk_data *data;
         unsigned int tid = netdev_offload_thread_id();
 
