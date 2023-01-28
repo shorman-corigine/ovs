@@ -2736,7 +2736,7 @@ tc_del_matchall_policer(struct netdev *netdev)
         return err;
     }
 
-    id = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS);
+    id = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, false);
     err = tc_del_filter(&id, "matchall");
     if (err) {
         return err;

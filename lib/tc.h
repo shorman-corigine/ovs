@@ -312,17 +312,19 @@ struct tcf_id {
     uint32_t chain;
     uint16_t prio;
     uint32_t handle;
+    bool gact_offload_support;
 };
 
 static inline struct tcf_id
 tc_make_tcf_id(int ifindex, uint32_t block_id, uint16_t prio,
-               enum tc_qdisc_hook hook)
+               enum tc_qdisc_hook hook, bool gact_offload_support)
 {
     struct tcf_id id = {
         .hook = hook,
         .block_id = block_id,
         .ifindex = ifindex,
         .prio = prio,
+        .gact_offload_support = gact_offload_support,
     };
 
     return id;
@@ -330,9 +332,11 @@ tc_make_tcf_id(int ifindex, uint32_t block_id, uint16_t prio,
 
 static inline struct tcf_id
 tc_make_tcf_id_chain(int ifindex, uint32_t block_id, uint32_t chain,
-                     uint16_t prio, enum tc_qdisc_hook hook)
+                     uint16_t prio, enum tc_qdisc_hook hook,
+                     bool gact_offload_support)
 {
-    struct tcf_id id = tc_make_tcf_id(ifindex, block_id, prio, hook);
+    struct tcf_id id = tc_make_tcf_id(ifindex, block_id, prio, hook,
+                                      gact_offload_support);
 
     id.chain = chain;
 

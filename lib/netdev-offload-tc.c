@@ -580,7 +580,7 @@ netdev_tc_flow_dump_create(struct netdev *netdev,
     dump->netdev = netdev_ref(netdev);
     dump->terse = terse;
 
-    id = tc_make_tcf_id(ifindex, block_id, prio, hook);
+    id = tc_make_tcf_id(ifindex, block_id, prio, hook, false);
     tc_dump_flower_start(&id, dump->nl_dump, terse);
 
     *dump_out = dump;
@@ -1253,7 +1253,8 @@ netdev_tc_flow_dump_next(struct netdev_flow_dump *dump,
     id = tc_make_tcf_id(netdev_get_ifindex(netdev),
                         get_block_id_from_netdev(netdev),
                         0, /* prio */
-                        get_tc_qdisc_hook(netdev));
+                        get_tc_qdisc_hook(netdev),
+                        false);
 
     while (nl_dump_next(dump->nl_dump, &nl_flow, rbuffer)) {
         struct dpif_flow_stats adjust_stats;
@@ -2439,7 +2440,7 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
     flower.act_cookie.len = sizeof *ufid;
 
     block_id = get_block_id_from_netdev(netdev);
-    id = tc_make_tcf_id_chain(ifindex, block_id, chain, prio, hook);
+    id = tc_make_tcf_id_chain(ifindex, block_id, chain, prio, hook, false);
     err = tc_replace_flower(&id, &flower);
     if (!err) {
         if (stats) {
@@ -2562,7 +2563,7 @@ probe_multi_mask_per_prio(int ifindex)
     }
 
     flower_init_simple(&flower, TC_POLICY_SKIP_HW);
-    id1 = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS);
+    id1 = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, false);
     error = tc_replace_flower(&id1, &flower);
     if (error) {
         goto out;
@@ -2571,7 +2572,7 @@ probe_multi_mask_per_prio(int ifindex)
     memset(&flower.key.src_mac, 0x11, sizeof flower.key.src_mac);
     memset(&flower.mask.src_mac, 0xff, sizeof flower.mask.src_mac);
 
-    id2 = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS);
+    id2 = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, false);
     error = tc_replace_flower(&id2, &flower);
     tc_del_flower_filter(&id1);
 
@@ -2602,7 +2603,7 @@ probe_insert_ct_state_rule(int ifindex, uint16_t ct_state, struct tcf_id *id)
     flower.key.eth_type = htons(ETH_P_IP);
     flower.mask.eth_type = OVS_BE16_MAX;
 
-    *id = tc_make_tcf_id(ifindex, 0, prio, TC_INGRESS);
+    *id = tc_make_tcf_id(ifindex, 0, prio, TC_INGRESS, false);
     return tc_replace_flower(id, &flower);
 }
 
@@ -2693,7 +2694,7 @@ probe_tc_block_support(int ifindex)
     }
 
     flower_init_simple(&flower, TC_POLICY_SKIP_HW);
-    id = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS);
+    id = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, false);
     error = tc_replace_flower(&id, &flower);
 
     tc_add_del_qdisc(ifindex, false, block_id, TC_INGRESS);
@@ -2808,7 +2809,7 @@ netdev_tc_init_flow_api(struct netdev *netdev)
     }
 
     block_id = get_block_id_from_netdev(netdev);
-    id = tc_make_tcf_id(ifindex, block_id, 0, hook);
+    id = tc_make_tcf_id(ifindex, block_id, 0, hook, false);
 
     if (get_chain_supported) {
         if (delete_chains_from_netdev(netdev, &id)) {

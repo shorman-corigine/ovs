@@ -98,6 +98,7 @@ struct netdev {
     OVSRCU_TYPE(const struct netdev_flow_api *) flow_api;
     const char *dpif_type;          /* Type of dpif this netdev belongs to. */
     struct netdev_hw_info hw_info;  /* Offload-capable netdev info. */
+    bool gact_offload_support;
 };
 
 static inline void
