@@ -1396,7 +1396,7 @@ nl_parse_act_gact(struct nlattr *options, struct tc_flower *flower)
         action->chain = p->action & TC_ACT_EXT_VAL_MASK;
         action->type = TC_ACT_GOTO;
         nl_parse_action_pc(p->action, action);
-    } else if (p->action != TC_ACT_SHOT) {
+    } else if (p->action != TC_ACT_SHOT && p->action != TC_ACT_PIPE) {
         VLOG_ERR_RL(&error_rl, "unknown gact action: %d", p->action);
         return EINVAL;
     }
@@ -2621,14 +2621,14 @@ nl_msg_put_act_tunnel_key_set(struct ofpbuf *request, bool id_present,
 }
 
 static void
-nl_msg_put_act_gact(struct ofpbuf *request, uint32_t chain)
+nl_msg_put_act_gact(struct ofpbuf *request, uint32_t chain, int tc_act_type)
 {
     size_t offset;
 
     nl_msg_put_string(request, TCA_ACT_KIND, "gact");
     offset = nl_msg_start_nested(request, TCA_ACT_OPTIONS);
     {
-        struct tc_gact p = { .action = TC_ACT_SHOT };
+        struct tc_gact p = { .action = tc_act_type };
 
         if (chain) {
             p.action = TC_ACT_GOTO_CHAIN | chain;
@@ -3352,9 +3352,8 @@ nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower)
                      */
                     return -EOPNOTSUPP;
                 }
-
                 act_offset = nl_msg_start_nested(request, act_index++);
-                nl_msg_put_act_gact(request, action->chain);
+                nl_msg_put_act_gact(request, action->chain, TC_ACT_SHOT);
                 nl_msg_put_act_cookie(request, &flower->act_cookie);
                 nl_msg_end_nested(request, act_offset);
             }
@@ -3393,7 +3392,7 @@ nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower)
 
     if (!flower->action_count) {
         act_offset = nl_msg_start_nested(request, act_index++);
-        nl_msg_put_act_gact(request, 0);
+        nl_msg_put_act_gact(request, 0, TC_ACT_SHOT);
         nl_msg_put_act_cookie(request, &flower->act_cookie);
         nl_msg_put_act_flags(request);
         nl_msg_end_nested(request, act_offset);
