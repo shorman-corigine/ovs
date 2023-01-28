@@ -2441,7 +2441,7 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
 
     block_id = get_block_id_from_netdev(netdev);
     id = tc_make_tcf_id_chain(ifindex, block_id, chain, prio, hook, false);
-    err = tc_replace_flower(&id, &flower);
+    err = tc_replace_flower(&id, &flower, 0);
     if (!err) {
         if (stats) {
             memset(stats, 0, sizeof *stats);
@@ -2564,7 +2564,7 @@ probe_multi_mask_per_prio(int ifindex)
 
     flower_init_simple(&flower, TC_POLICY_SKIP_HW);
     id1 = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, false);
-    error = tc_replace_flower(&id1, &flower);
+    error = tc_replace_flower(&id1, &flower, 0);
     if (error) {
         goto out;
     }
@@ -2573,7 +2573,7 @@ probe_multi_mask_per_prio(int ifindex)
     memset(&flower.mask.src_mac, 0xff, sizeof flower.mask.src_mac);
 
     id2 = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, false);
-    error = tc_replace_flower(&id2, &flower);
+    error = tc_replace_flower(&id2, &flower, 0);
     tc_del_flower_filter(&id1);
 
     if (error) {
@@ -2604,7 +2604,7 @@ probe_insert_ct_state_rule(int ifindex, uint16_t ct_state, struct tcf_id *id)
     flower.mask.eth_type = OVS_BE16_MAX;
 
     *id = tc_make_tcf_id(ifindex, 0, prio, TC_INGRESS, false);
-    return tc_replace_flower(id, &flower);
+    return tc_replace_flower(id, &flower, 0);
 }
 
 static void
@@ -2695,7 +2695,7 @@ probe_tc_block_support(int ifindex)
 
     flower_init_simple(&flower, TC_POLICY_SKIP_HW);
     id = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, false);
-    error = tc_replace_flower(&id, &flower);
+    error = tc_replace_flower(&id, &flower, 0);
 
     tc_add_del_qdisc(ifindex, false, block_id, TC_INGRESS);
 
@@ -2703,6 +2703,34 @@ probe_tc_block_support(int ifindex)
         block_support = true;
         VLOG_INFO("probe tc: block offload is supported.");
     }
+}
+
+static bool
+probe_tc_gact_support(int ifindex, int tc_act_type)
+{
+    struct tc_flower flower;
+    uint32_t block_id = 1;
+    struct tcf_id id;
+    int prio = 0;
+    int error;
+
+    error = tc_add_del_qdisc(ifindex, true, block_id, TC_INGRESS);
+    if (error) {
+        return error;
+    }
+
+    flower_init_simple(&flower, TC_POLICY_SKIP_SW);
+    id = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS, 0);
+    error = tc_replace_flower(&id, &flower, tc_act_type);
+    tc_add_del_qdisc(ifindex, false, block_id, TC_INGRESS);
+
+    if (error) {
+        VLOG_INFO("probe tc: gact offload %i is not supported.", tc_act_type);
+    } else {
+        VLOG_INFO("probe tc: gact offload %i is supported.", tc_act_type);
+    }
+
+    return error;
 }
 
 static int
@@ -2842,6 +2870,16 @@ netdev_tc_init_flow_api(struct netdev *netdev)
 
         ovsthread_once_done(&once);
     }
+
+    /* probe_tc_gact_support(ifindex, TC_ACT_PIPE) == 1 indicates this netdev
+     * supports gact/pipe HW offload.
+     * !probe_tc_gact_support(ifindex, TC_ACT_SHOT) == 1 indicates this netdev
+     * doesn't support TC HW offload. Flows, which use this netdev,
+     * may use the TC SW datapath, which supports gact/pipe SW offload.
+     * Either these 2 conditions allow adding a dummy action to TC filters
+     * to collect the flow stats. */
+    netdev->gact_offload_support = !probe_tc_gact_support(ifindex, TC_ACT_PIPE)
+                                || probe_tc_gact_support(ifindex, TC_ACT_SHOT);
 
     error = tc_add_del_qdisc(ifindex, true, block_id, hook);
 

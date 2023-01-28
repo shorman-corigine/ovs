@@ -386,7 +386,8 @@ struct tc_flower {
     enum tc_offload_policy tc_policy;
 };
 
-int tc_replace_flower(struct tcf_id *id, struct tc_flower *flower);
+int tc_replace_flower(struct tcf_id *id, struct tc_flower *flower,
+                      int tc_act_type);
 int tc_del_filter(struct tcf_id *id, const char *kind);
 int tc_del_flower_filter(struct tcf_id *id);
 int tc_get_flower(struct tcf_id *id, struct tc_flower *flower);

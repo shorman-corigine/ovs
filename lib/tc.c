@@ -3150,6 +3150,23 @@ nl_msg_put_act_police_mtu(struct ofpbuf *request, struct tc_flower *flower,
 }
 
 static int
+nl_msg_put_flower_acts_probe(struct ofpbuf *request, int tc_act_type)
+{
+    uint16_t act_index = 1;
+    size_t act_offset;
+    size_t offset;
+
+    offset = nl_msg_start_nested(request, TCA_FLOWER_ACT);
+    act_offset = nl_msg_start_nested(request, act_index++);
+    /* The index of this action could an arbitrary value*/
+    nl_msg_put_act_gact(request, 0, tc_act_type);
+    nl_msg_put_act_flags(request);
+    nl_msg_end_nested(request, act_offset);
+    nl_msg_end_nested(request, offset);
+    return 0;
+}
+
+static int
 nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower)
 {
     bool ingress, released = false;
@@ -3518,7 +3535,8 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
                             &flower->mask.member, sizeof flower->key.member)
 
 static int
-nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower)
+nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower,
+                          int tc_act_type)
 {
 
     uint16_t host_eth_type = ntohs(flower->key.eth_type);
@@ -3530,7 +3548,13 @@ nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower)
 
     /* need to parse acts first as some acts require changing the matching
      * see csum_update_flag()  */
-    err  = nl_msg_put_flower_acts(request, flower);
+    if (tc_act_type) {
+        /* When tc_act_type is non-zero, nl_msg_put_flower_options() is used to
+         * probe whether this interface supports gact/pipe offloads. */
+        err = nl_msg_put_flower_acts_probe(request, tc_act_type);
+    } else {
+        err = nl_msg_put_flower_acts(request, flower);
+    }
     if (err) {
         return err;
     }
@@ -3783,7 +3807,7 @@ cmp_tc_flower_match_action(const struct tc_flower *a,
 }
 
 int
-tc_replace_flower(struct tcf_id *id, struct tc_flower *flower)
+tc_replace_flower(struct tcf_id *id, struct tc_flower *flower, int tc_act_type)
 {
     struct ofpbuf request;
     struct ofpbuf *reply;
@@ -3797,7 +3821,7 @@ tc_replace_flower(struct tcf_id *id, struct tc_flower *flower)
     nl_msg_put_string(&request, TCA_KIND, "flower");
     basic_offset = nl_msg_start_nested(&request, TCA_OPTIONS);
     {
-        error = nl_msg_put_flower_options(&request, flower);
+        error = nl_msg_put_flower_options(&request, flower, tc_act_type);
 
         if (error) {
             ofpbuf_uninit(&request);
@@ -3807,6 +3831,7 @@ tc_replace_flower(struct tcf_id *id, struct tc_flower *flower)
     nl_msg_end_nested(&request, basic_offset);
 
     error = tc_transact(&request, &reply);
+
     if (!error) {
         struct tcmsg *tc =
             ofpbuf_at_assert(reply, NLMSG_HDRLEN, sizeof *tc);
