@@ -2440,7 +2440,8 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
     flower.act_cookie.len = sizeof *ufid;
 
     block_id = get_block_id_from_netdev(netdev);
-    id = tc_make_tcf_id_chain(ifindex, block_id, chain, prio, hook, false);
+    id = tc_make_tcf_id_chain(ifindex, block_id, chain, prio, hook,
+                              netdev->gact_offload_support);
     err = tc_replace_flower(&id, &flower, 0);
     if (!err) {
         if (stats) {

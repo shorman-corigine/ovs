@@ -1944,7 +1944,7 @@ err:
 
 static int
 nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
-                       bool terse, bool *csum)
+                       bool terse, bool *csum, bool first_action)
 {
     struct nlattr *act_options;
     struct nlattr *act_cookie;
@@ -2000,9 +2000,12 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
         flower->act_cookie.data = nl_attr_get(act_cookie);
         flower->act_cookie.len = nl_attr_get_size(act_cookie);
     }
-
-    return nl_parse_action_stats(action_attrs[TCA_ACT_STATS],
-                                 &flower->stats_sw, &flower->stats_hw, NULL);
+    if (first_action) {
+        return nl_parse_action_stats(action_attrs[TCA_ACT_STATS],
+                        &flower->stats_sw, &flower->stats_hw, NULL);
+    } else {
+        return 0;
+    }
 }
 
 int
@@ -2050,6 +2053,7 @@ nl_parse_flower_actions(struct nlattr **attrs, struct tc_flower *flower,
 
     for (int i = TCA_ACT_MIN_PRIO; i < max_size; i++) {
         if (actions_orders[i]) {
+            bool first_action = (i == 1);
             int err;
 
             if (flower->action_count >= TCA_ACT_MAX_NUM) {
@@ -2057,7 +2061,7 @@ nl_parse_flower_actions(struct nlattr **attrs, struct tc_flower *flower,
                 return EOPNOTSUPP;
             }
             err = nl_parse_single_action(actions_orders[i], flower, terse,
-                                         &csum);
+                                         &csum, first_action);
 
             if (flower->action_count == previous_action_count) {
 
@@ -2323,7 +2327,7 @@ parse_netlink_to_tc_policer(struct ofpbuf *reply, uint32_t police_idx[])
 
             memset(&flower, 0, sizeof(struct tc_flower));
             err = nl_parse_single_action(actions_orders[i], &flower, false,
-                                         &csum);
+                                         &csum, false);
             if (err || flower.actions[0].type != TC_ACT_POLICE) {
                 continue;
             }
@@ -3167,7 +3171,8 @@ nl_msg_put_flower_acts_probe(struct ofpbuf *request, int tc_act_type)
 }
 
 static int
-nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower)
+nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower,
+                       bool gact_offload_support)
 {
     bool ingress, released = false;
     size_t offset;
@@ -3180,6 +3185,12 @@ nl_msg_put_flower_acts(struct ofpbuf *request, struct tc_flower *flower)
     {
         int error;
         uint32_t prev_action_pc = TC_ACT_PIPE;
+        if (flower->action_count && gact_offload_support) {
+            act_offset = nl_msg_start_nested(request, act_index++);
+            nl_msg_put_act_gact(request, 0, TC_ACT_PIPE);
+            nl_msg_put_act_flags(request);
+            nl_msg_end_nested(request, act_offset);
+        }
 
         action = flower->actions;
         for (i = 0; i < flower->action_count; i++, action++) {
@@ -3536,7 +3547,7 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
 
 static int
 nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower,
-                          int tc_act_type)
+                          int tc_act_type, bool gact_offload_support)
 {
 
     uint16_t host_eth_type = ntohs(flower->key.eth_type);
@@ -3553,7 +3564,7 @@ nl_msg_put_flower_options(struct ofpbuf *request, struct tc_flower *flower,
          * probe whether this interface supports gact/pipe offloads. */
         err = nl_msg_put_flower_acts_probe(request, tc_act_type);
     } else {
-        err = nl_msg_put_flower_acts(request, flower);
+        err = nl_msg_put_flower_acts(request, flower, gact_offload_support);
     }
     if (err) {
         return err;
@@ -3821,7 +3832,8 @@ tc_replace_flower(struct tcf_id *id, struct tc_flower *flower, int tc_act_type)
     nl_msg_put_string(&request, TCA_KIND, "flower");
     basic_offset = nl_msg_start_nested(&request, TCA_OPTIONS);
     {
-        error = nl_msg_put_flower_options(&request, flower, tc_act_type);
+        error = nl_msg_put_flower_options(&request, flower, tc_act_type,
+                                          id->gact_offload_support);
 
         if (error) {
             ofpbuf_uninit(&request);
