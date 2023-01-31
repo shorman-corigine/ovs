@@ -2536,6 +2536,18 @@ netdev_tc_get_n_flows(struct netdev *netdev, uint64_t *n_flows)
 }
 
 static void
+flower_init_simple(struct tc_flower *flower, int tc_policy)
+{
+    memset(flower, 0, sizeof *flower);
+
+    flower->tc_policy = tc_policy;
+    flower->key.eth_type = htons(ETH_P_IP);
+    flower->mask.eth_type = OVS_BE16_MAX;
+    memset(&flower->key.dst_mac, 0x11, sizeof flower->key.dst_mac);
+    memset(&flower->mask.dst_mac, 0xff, sizeof flower->mask.dst_mac);
+}
+
+static void
 probe_multi_mask_per_prio(int ifindex)
 {
     struct tc_flower flower;
@@ -2549,14 +2561,7 @@ probe_multi_mask_per_prio(int ifindex)
         return;
     }
 
-    memset(&flower, 0, sizeof flower);
-
-    flower.tc_policy = TC_POLICY_SKIP_HW;
-    flower.key.eth_type = htons(ETH_P_IP);
-    flower.mask.eth_type = OVS_BE16_MAX;
-    memset(&flower.key.dst_mac, 0x11, sizeof flower.key.dst_mac);
-    memset(&flower.mask.dst_mac, 0xff, sizeof flower.mask.dst_mac);
-
+    flower_init_simple(&flower, TC_POLICY_SKIP_HW);
     id1 = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS);
     error = tc_replace_flower(&id1, &flower);
     if (error) {
@@ -2687,14 +2692,7 @@ probe_tc_block_support(int ifindex)
         return;
     }
 
-    memset(&flower, 0, sizeof flower);
-
-    flower.tc_policy = TC_POLICY_SKIP_HW;
-    flower.key.eth_type = htons(ETH_P_IP);
-    flower.mask.eth_type = OVS_BE16_MAX;
-    memset(&flower.key.dst_mac, 0x11, sizeof flower.key.dst_mac);
-    memset(&flower.mask.dst_mac, 0xff, sizeof flower.mask.dst_mac);
-
+    flower_init_simple(&flower, TC_POLICY_SKIP_HW);
     id = tc_make_tcf_id(ifindex, block_id, prio, TC_INGRESS);
     error = tc_replace_flower(&id, &flower);
 
