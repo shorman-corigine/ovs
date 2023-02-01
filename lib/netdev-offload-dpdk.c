@@ -920,6 +920,7 @@ netdev_offload_dpdk_flow_create(struct netdev *netdev,
             extra_str = ds_cstr(&s_extra);
             VLOG_DBG_RL(&rl, "%s: rte_flow 0x%"PRIxPTR" %s  flow create %d %s",
                         netdev_get_name(netdev), (intptr_t) flow, extra_str,
+                        attr->transfer ? netdev_dpdk_get_prox_port_id(netdev) :
                         netdev_dpdk_get_port_id(netdev), ds_cstr(&s));
         }
     } else {
@@ -935,6 +936,7 @@ netdev_offload_dpdk_flow_create(struct netdev *netdev,
             extra_str = ds_cstr(&s_extra);
             VLOG_RL(&rl, level, "%s: Failed flow: %s  flow create %d %s",
                     netdev_get_name(netdev), extra_str,
+                    attr->transfer ? netdev_dpdk_get_prox_port_id(netdev) :
                     netdev_dpdk_get_port_id(netdev), ds_cstr(&s));
         }
     }
@@ -1114,13 +1116,13 @@ vport_to_rte_tunnel(struct netdev *vport,
         tunnel->tp_dst = tnl_cfg->dst_port;
         if (!VLOG_DROP_DBG(&rl)) {
             ds_put_format(s_tnl, "flow tunnel create %d type vxlan; ",
-                          netdev_dpdk_get_port_id(netdev));
+                          netdev_dpdk_get_prox_port_id(netdev));
         }
     } else if (!strcmp(netdev_get_type(vport), "gre")) {
         tunnel->type = RTE_FLOW_ITEM_TYPE_GRE;
         if (!VLOG_DROP_DBG(&rl)) {
             ds_put_format(s_tnl, "flow tunnel create %d type gre; ",
-                          netdev_dpdk_get_port_id(netdev));
+                          netdev_dpdk_get_prox_port_id(netdev));
         }
     } else {
         VLOG_DBG_RL(&rl, "vport type '%s' is not supported",
@@ -2242,7 +2244,7 @@ netdev_offload_dpdk_actions(struct netdev *netdev,
                             struct nlattr *nl_actions,
                             size_t actions_len)
 {
-    const struct rte_flow_attr flow_attr = { .ingress = 1, .transfer = 1 };
+    const struct rte_flow_attr flow_attr = { .transfer = 1 };
     struct flow_actions actions = {
         .actions = NULL,
         .cnt = 0,
@@ -2319,6 +2321,7 @@ netdev_offload_dpdk_flow_destroy(struct ufid_to_rte_flow_data *rte_flow_data)
     struct netdev *physdev;
     struct netdev *netdev;
     ovs_u128 *ufid;
+    bool transfer;
     int ret;
 
     ovs_mutex_lock(&rte_flow_data->lock);
@@ -2330,12 +2333,13 @@ netdev_offload_dpdk_flow_destroy(struct ufid_to_rte_flow_data *rte_flow_data)
 
     rte_flow_data->dead = true;
 
+    transfer = rte_flow_data->actions_offloaded;
     rte_flow = rte_flow_data->rte_flow;
     physdev = rte_flow_data->physdev;
     netdev = rte_flow_data->netdev;
     ufid = &rte_flow_data->ufid;
 
-    ret = netdev_dpdk_rte_flow_destroy(physdev, rte_flow, &error);
+    ret = netdev_dpdk_rte_flow_destroy(physdev, transfer, rte_flow, &error);
 
     if (ret == 0) {
         struct netdev_offload_dpdk_data *data;
@@ -2350,12 +2354,12 @@ netdev_offload_dpdk_flow_destroy(struct ufid_to_rte_flow_data *rte_flow_data)
                     " flow destroy %d ufid " UUID_FMT,
                     netdev_get_name(netdev), netdev_get_name(physdev),
                     (intptr_t) rte_flow,
-                    netdev_dpdk_get_port_id(physdev),
+                    netdev_dpdk_get_prox_port_id(physdev),
                     UUID_ARGS((struct uuid *) ufid));
     } else {
         VLOG_ERR("Failed flow: %s/%s: flow destroy %d ufid " UUID_FMT,
                  netdev_get_name(netdev), netdev_get_name(physdev),
-                 netdev_dpdk_get_port_id(physdev),
+                 netdev_dpdk_get_prox_port_id(physdev),
                  UUID_ARGS((struct uuid *) ufid));
     }
 

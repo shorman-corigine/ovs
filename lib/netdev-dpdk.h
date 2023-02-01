@@ -36,6 +36,7 @@ bool netdev_dpdk_flow_api_supported(struct netdev *);
 
 int
 netdev_dpdk_rte_flow_destroy(struct netdev *netdev,
+                             bool transfer,
                              struct rte_flow *rte_flow,
                              struct rte_flow_error *error);
 struct rte_flow *
@@ -51,6 +52,8 @@ netdev_dpdk_rte_flow_query_count(struct netdev *netdev,
                                  struct rte_flow_error *error);
 int
 netdev_dpdk_get_port_id(struct netdev *netdev);
+int
+netdev_dpdk_get_prox_port_id(struct netdev *netdev);
 
 #ifdef ALLOW_EXPERIMENTAL_API
 
