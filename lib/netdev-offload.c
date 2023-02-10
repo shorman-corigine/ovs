@@ -256,6 +256,24 @@ meter_offload_del(ofproto_meter_id meter_id, struct ofputil_meter_stats *stats)
     return 0;
 }
 
+int meter_offload_cleanup(void)
+{
+    struct netdev_registered_flow_api *rfa;
+    int ret = 0;
+
+    CMAP_FOR_EACH (rfa, cmap_node, &netdev_flow_apis) {
+        if (rfa->flow_api->meter_get) {
+            int err = rfa->flow_api->meter_cleanup();
+            if (ret) {
+                VLOG_DBG_RL(&rl, "Failed clean up police in datapath.");
+                ret = err;
+           }
+        }
+    }
+
+    return ret;
+}
+
 int
 netdev_flow_flush(struct netdev *netdev)
 {

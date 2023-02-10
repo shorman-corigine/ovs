@@ -753,6 +753,7 @@ dpif_netlink_run(struct dpif *dpif_)
             fat_rwlock_unlock(&dpif->upcall_lock);
         }
     }
+    meter_offload_cleanup();
     return false;
 }
 

@@ -121,6 +121,9 @@ struct netdev_flow_api {
     int (*meter_del)(ofproto_meter_id meter_id,
                      struct ofputil_meter_stats *stats);
 
+    /* Clean up policies which are not successfully deleted */
+    int (*meter_cleanup)(void);
+
     /* Initializies the netdev flow api.
      * Return 0 if successful, otherwise returns a positive errno value. */
     int (*init_flow_api)(struct netdev *);

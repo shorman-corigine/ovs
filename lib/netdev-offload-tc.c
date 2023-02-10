@@ -85,6 +85,8 @@ static struct hmap meter_id_to_police_idx OVS_GUARDED_BY(meter_mutex)
     = HMAP_INITIALIZER(&meter_id_to_police_idx);
 static struct hmap police_idx_to_meter_id OVS_GUARDED_BY(meter_mutex)
     = HMAP_INITIALIZER(&police_idx_to_meter_id);
+static struct hmap fail_meter_police_ids_map
+    = HMAP_INITIALIZER(&fail_meter_police_ids_map);
 
 static int meter_id_lookup(uint32_t meter_id, uint32_t *police_idx);
 static int police_idx_lookup(uint32_t police_idx, uint32_t *meter_id);
@@ -2974,6 +2976,30 @@ meter_free_police_index(uint32_t police_index)
     ovs_mutex_unlock(&meter_police_ids_mutex);
 }
 
+static void
+policer_node_add(struct hmap map, uint32_t police_index)
+{
+    struct policer_node *policer_node = xmalloc(sizeof *policer_node);
+    size_t hash = hash_int(police_index, 0);
+
+    policer_node->police_idx = police_index;
+    hmap_insert(&map, &policer_node->node, hash);
+}
+
+static struct policer_node *
+policer_node_find(struct hmap map, uint32_t police_index)
+{
+    struct policer_node *policer_node = xmalloc(sizeof *policer_node);
+    size_t hash = hash_int(police_index, 0);
+
+    HMAP_FOR_EACH_WITH_HASH (policer_node, node, hash, &map) {
+        if (policer_node->police_idx == police_index) {
+            return policer_node;
+        }
+    }
+    return NULL;
+}
+
 static int
 meter_tc_set_policer(ofproto_meter_id meter_id,
                      struct ofputil_meter_config *config)
@@ -3057,15 +3083,50 @@ meter_tc_del_policer(ofproto_meter_id meter_id,
     if (!meter_id_lookup(meter_id.uint32, &police_index)) {
         err = tc_del_policer_action(police_index, stats);
         if (err && err != ENOENT) {
-            VLOG_ERR_RL(&error_rl,
-                        "Failed to del police %u for meter %u: %s",
-                        police_index, meter_id.uint32, ovs_strerror(err));
+            VLOG_INFO("Failed to del police %u for meter %u: %s",
+                      police_index, meter_id.uint32, ovs_strerror(err));
+            policer_node_add(fail_meter_police_ids_map, police_index);
         } else {
             meter_free_police_index(police_index);
         }
         meter_id_remove(meter_id.uint32);
     }
 
+    return err;
+}
+
+static int meter_tc_cleanup_policer(void)
+{
+    struct policer_node *policer_node;
+    struct hmap temp_copied_map;
+    uint32_t police_idx = 0;
+    int err = 0;
+
+    hmap_init(&temp_copied_map);
+
+    HMAP_FOR_EACH (policer_node, node, &fail_meter_police_ids_map) {
+        police_idx = policer_node->police_idx;
+        policer_node_add(temp_copied_map, police_idx);
+    }
+
+    HMAP_FOR_EACH_POP (policer_node, node, &temp_copied_map) {
+        police_idx = policer_node->police_idx;
+        if (police_idx >= METER_POLICE_IDS_BASE &&
+            police_idx <= METER_POLICE_IDS_MAX) {
+            err = tc_del_policer_action(police_idx, NULL);
+            if (err) {
+                VLOG_INFO("failed to clean up police %u", police_idx);
+            } else {
+                VLOG_INFO("clean up police %u success",police_idx);
+                struct policer_node *temp_node;
+                temp_node = policer_node_find(fail_meter_police_ids_map,
+                                              police_idx);
+                hmap_remove(&fail_meter_police_ids_map, &temp_node->node);
+                free(temp_node);
+            }
+        }
+        free(policer_node);
+    }
     return err;
 }
 
@@ -3082,5 +3143,6 @@ const struct netdev_flow_api netdev_offload_tc = {
    .meter_set = meter_tc_set_policer,
    .meter_get = meter_tc_get_policer,
    .meter_del = meter_tc_del_policer,
+   .meter_cleanup = meter_tc_cleanup_policer,
    .init_flow_api = netdev_tc_init_flow_api,
 };
