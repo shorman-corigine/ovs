@@ -99,7 +99,8 @@ struct netdev_flow_api {
      * returned.
      *
      * The meter id specified through 'config->meter_id' is ignored. */
-    int (*meter_set)(ofproto_meter_id meter_id,
+    int (*meter_set)(const char *type,
+                     ofproto_meter_id meter_id,
                      struct ofputil_meter_config *config);
 
     /* Queries HW for meter stats with the given 'meter_id'. Store the stats
@@ -110,7 +111,8 @@ struct netdev_flow_api {
      * available statistics should be incremented, not replaced. Those fields
      * are packet_in_count, byte_in_count and band[]->byte_count and
      * band[]->packet_count. */
-    int (*meter_get)(ofproto_meter_id meter_id,
+    int (*meter_get)(const char *type,
+                     ofproto_meter_id meter_id,
                      struct ofputil_meter_stats *stats);
 
     /* Removes meter 'meter_id' from HW. Store the stats of dropped packets to
@@ -118,7 +120,8 @@ struct netdev_flow_api {
      *
      * 'stats' may be passed in as NULL if no stats are needed, See the above
      * function for additional details on the 'stats' usage. */
-    int (*meter_del)(ofproto_meter_id meter_id,
+    int (*meter_del)(const char *type,
+                     ofproto_meter_id meter_id,
                      struct ofputil_meter_stats *stats);
 
     /* Initializies the netdev flow api.

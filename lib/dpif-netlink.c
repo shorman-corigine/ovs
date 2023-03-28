@@ -4249,7 +4249,8 @@ dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id meter_id,
 
     err = dpif_netlink_meter_set__(dpif_, meter_id, config);
     if (!err && netdev_is_flow_api_enabled()) {
-        meter_offload_set(meter_id, config);
+        meter_offload_set(dpif_normalize_type(dpif_type(dpif_)),
+                          meter_id, config);
     }
 
     return err;
@@ -4348,7 +4349,8 @@ dpif_netlink_meter_get(const struct dpif *dpif, ofproto_meter_id meter_id,
     err = dpif_netlink_meter_get_stats(dpif, meter_id, stats, max_bands,
                                        OVS_METER_CMD_GET);
     if (!err && netdev_is_flow_api_enabled()) {
-        meter_offload_get(meter_id, stats);
+        meter_offload_get(dpif_normalize_type(dpif_type(dpif)),
+                          meter_id, stats);
     }
 
     return err;
@@ -4363,7 +4365,8 @@ dpif_netlink_meter_del(struct dpif *dpif, ofproto_meter_id meter_id,
     err  = dpif_netlink_meter_get_stats(dpif, meter_id, stats,
                                         max_bands, OVS_METER_CMD_DEL);
     if (!err && netdev_is_flow_api_enabled()) {
-        meter_offload_del(meter_id, stats);
+        meter_offload_del(dpif_normalize_type(dpif_type(dpif)),
+                          meter_id, stats);
     }
 
     return err;

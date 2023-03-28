@@ -2892,13 +2892,19 @@ meter_free_police_index(uint32_t police_index)
 }
 
 static int
-meter_tc_set_policer(ofproto_meter_id meter_id,
+meter_tc_set_policer(const char *dpif_type,
+                     ofproto_meter_id meter_id,
                      struct ofputil_meter_config *config)
 {
     uint32_t police_index;
     uint32_t rate, burst;
     bool add_policer;
     int err;
+
+    if (strcmp(dpif_type, "system")) {
+        VLOG_DBG("meter doesn't belongs to the system datapath. Skipping.");
+        return EOPNOTSUPP;
+    }
 
     if (!config->bands || config->n_bands < 1 ||
         config->bands[0].type != OFPMBT13_DROP) {
@@ -2946,11 +2952,17 @@ meter_tc_set_policer(ofproto_meter_id meter_id,
 }
 
 static int
-meter_tc_get_policer(ofproto_meter_id meter_id,
+meter_tc_get_policer(const char *dpif_type,
+                     ofproto_meter_id meter_id,
                      struct ofputil_meter_stats *stats)
 {
     uint32_t police_index;
     int err = ENOENT;
+
+    if (strcmp(dpif_type, "system")) {
+        VLOG_DBG("meter doesn't belongs to the system datapath. Skipping.");
+        return EOPNOTSUPP;
+    }
 
     if (!meter_id_lookup(meter_id.uint32, &police_index)) {
         err = tc_get_policer_action(police_index, stats);
@@ -2965,11 +2977,17 @@ meter_tc_get_policer(ofproto_meter_id meter_id,
 }
 
 static int
-meter_tc_del_policer(ofproto_meter_id meter_id,
+meter_tc_del_policer(const char *dpif_type,
+                     ofproto_meter_id meter_id,
                      struct ofputil_meter_stats *stats)
 {
     uint32_t police_index;
     int err = ENOENT;
+
+    if (strcmp(dpif_type, "system")) {
+        VLOG_DBG("meter doesn't belongs to the system datapath. Skipping.");
+        return EOPNOTSUPP;
+    }
 
     if (!meter_id_lookup(meter_id.uint32, &police_index)) {
         err = tc_del_policer_action(police_index, stats);
